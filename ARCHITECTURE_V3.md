@@ -334,3 +334,31 @@ failure, folder-enter failure isolation, folder-disappeared handling, max-depth,
 interactive-auth surfacing, transient-retry-then-succeed, transient-exhaustion, pre-cancel
 and mid-analysis cancel, failure recorded to state; plus `RetryPolicy`, `DocumentClassifier`,
 and `JsonStateStore` unit tests.
+
+---
+
+## Stage C — PROVEN on the real VTW U: machine (2026-10-02)
+
+The single-PPTX milestone completed end to end on the target environment:
+
+```
+explorer.start -> folder.scan(office=1) -> file.open -> office.ready(PowerPoint)
+-> analyzer.open(PPTX analyzer) -> analyzer.pane "Task pane ready"
+-> analysis.start -> analysis.working -> auth.window(Google) -> auth.interactive
+-> file.complete -> office.closed -> agent.complete Processed=1 Failed=0
+```
+
+The WebView2 task-pane gate (the v2.5 blocker) is cracked. What fixed it:
+- Match the start button by Contains("구조 분석 시작") — its accessible name carries
+  the "🔍" emoji, so exact equality missed it.
+- Wake the Office.js WebView2 accessibility tree with WM_GETOBJECT(UiaRootObjectId)
+  on the Office window and its Chrome/WebView2 child windows before each scan.
+
+Interactive auth also worked: with Google not signed in, the agent detected the
+sign-in window, waited, and resumed after the user completed it — no credentials
+stored.
+
+Remaining phases: D (single Excel), E (multi-file + recursion + resume), F
+(Electron GUI). The Excel and recursion code paths already exist (XLMAIN +
+"Excel analyzer"; EnableRecursion/MaxOfficeFiles), so D/E are mostly validation.
+Test on progressively larger TEST folders; the real work folder is the last step.

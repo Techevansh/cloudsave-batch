@@ -1,32 +1,44 @@
 param(
-  [string]$TargetPath = 'U:\부서 폴더\501. 공공부문 클라우드 네이티브 전문기술지원\10. 기술지원 2팀\099. 2팀_[개인폴더]\1. 백승훈 책임(H)'
+  [string]$TargetBase64
 )
 
 $ErrorActionPreference = 'Stop'
-$wshell = New-Object -ComObject WScript.Shell
 
-Write-Host ''
-Write-Host 'CloudSave UI Agent v0.5.1'
-Write-Host ('Target: ' + $TargetPath)
-Write-Host ''
-
-# Launch Explorer without asking PowerShell/.NET to enumerate the protected drive.
-Start-Process explorer.exe
-Start-Sleep -Seconds 2
-
-# Activate Explorer. Korean Windows may expose either title.
-$activated = $wshell.AppActivate('File Explorer')
-if (-not $activated) {
-  $activated = $wshell.AppActivate('파일 탐색기')
-}
-if (-not $activated) {
-  Write-Host '[ERROR] Explorer window could not be activated.'
+if ([string]::IsNullOrWhiteSpace($TargetBase64)) {
+  Write-Host 'ERROR: target path was not supplied.'
   exit 2
 }
 
-Start-Sleep -Milliseconds 500
+$TargetPath = [System.Text.Encoding]::UTF8.GetString(
+  [System.Convert]::FromBase64String($TargetBase64)
+)
 
-# Use Explorer's own UI only: focus address bar, paste path, press Enter.
+Write-Host ''
+Write-Host 'CloudSave UI Agent v0.5.2'
+Write-Host ('Target: ' + $TargetPath)
+Write-Host ''
+
+$wshell = New-Object -ComObject WScript.Shell
+
+Start-Process explorer.exe
+Start-Sleep -Seconds 2
+
+$explorer = Get-Process explorer -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } |
+  Select-Object -First 1
+
+if ($null -eq $explorer) {
+  Write-Host 'ERROR: Explorer window was not found.'
+  exit 3
+}
+
+$activated = $wshell.AppActivate($explorer.Id)
+if (-not $activated) {
+  Write-Host 'ERROR: Explorer window could not be activated.'
+  exit 4
+}
+
+Start-Sleep -Milliseconds 500
 $wshell.SendKeys('^l')
 Start-Sleep -Milliseconds 300
 Set-Clipboard -Value $TargetPath
@@ -34,5 +46,5 @@ $wshell.SendKeys('^v')
 Start-Sleep -Milliseconds 300
 $wshell.SendKeys('{ENTER}')
 
-Write-Host '[OK] Navigation command was sent to Explorer.'
-Write-Host 'Check whether Explorer is displaying the target folder.'
+Write-Host 'OK: navigation command sent to Explorer.'
+Write-Host 'Check the Explorer window.'

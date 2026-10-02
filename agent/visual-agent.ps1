@@ -71,13 +71,19 @@ function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=75){
  [CloudSaveVision]::GetWindowRect($h,[ref]$r)|Out-Null
  $w=$r.Right-$r.Left;$hh=$r.Bottom-$r.Top
  if($w -lt 500 -or $hh -lt 350){throw 'Explorer window is too small.'}
- $shot=New-Object Drawing.Bitmap $w,$hh
- $g=[Drawing.Graphics]::FromImage($shot);$g.CopyFromScreen($r.Left,$r.Top,0,0,$shot.Size);$g.Dispose()
+ # Exclude Explorer's left navigation pane. The same VTW label exists there and caused false matches.
+ $searchLeft=[Math]::Min(540,[Math]::Max(360,[int]($w*0.32)))
+ $searchTop=110
+ $searchW=$w-$searchLeft
+ $searchH=$hh-$searchTop
+ if($searchW -lt 300 -or $searchH -lt 250){throw 'Explorer content area is too small.'}
+ $shot=New-Object Drawing.Bitmap $searchW,$searchH
+ $g=[Drawing.Graphics]::FromImage($shot);$g.CopyFromScreen($r.Left+$searchLeft,$r.Top+$searchTop,0,0,$shot.Size);$g.Dispose()
  $tpl=[Drawing.Bitmap]::FromFile($Template)
  $m=[CloudSaveVision]::Match($shot,$tpl);$tw=$tpl.Width;$th=$tpl.Height;$tpl.Dispose();$shot.Dispose()
  Write-Host ('   '+$Label+' score: '+$m[2]+' / threshold: '+$Threshold)
  if($m[2] -gt $Threshold){throw ($Label+' visual score was too weak ('+$m[2]+'). Nothing was clicked.')}
- $x=$r.Left+$m[0]+[int]($tw/2);$y=$r.Top+$m[1]+[int]($th/2)
+ $x=$r.Left+$searchLeft+$m[0]+[int]($tw/2);$y=$r.Top+$searchTop+$m[1]+[int]($th/2)
  Write-Host ('   MATCH '+$Label+': '+$x+','+$y)
  [CloudSaveVision]::SetForegroundWindow($h)|Out-Null;Start-Sleep -Milliseconds 200
  [CloudSaveVision]::SetCursorPos($x,$y)|Out-Null;Start-Sleep -Milliseconds 300
@@ -85,7 +91,7 @@ function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=75){
 }
 
 Write-Host ''
-Write-Host 'CloudSave Visual Navigator v0.12.1'
+Write-Host 'CloudSave Visual Navigator v0.12.2'
 Write-Host 'No Explorer preparation is required.'
 $vtw='C:\cloudsave-batch\agent\templates\vtw-server-u.png'
 if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}
@@ -93,7 +99,7 @@ if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}
 # Always create our own Explorer window so the user does not have to prepare one.
 $h=Open-ThisPC
 Write-Host ('2/5 Explorer ready. Title: '+[CloudSaveVision]::Title($h))
-Write-Host '3/5 Looking for VTW Server (U:) only inside this Explorer window...'
+Write-Host '3/5 Looking for VTW Server (U:) in the MAIN CONTENT area only...'
 Match-And-Open $h $vtw 'VTW Server (U:)'
 Write-Host '4/5 Waiting for the U: view to load...'
 Start-Sleep -Seconds 2

@@ -161,16 +161,84 @@ function Find-VisibleByName([IntPtr]$h,[string]$name,[bool]$contains=$false){
  }
  return $hits
 }
+function Find-AnalyzerCandidates([IntPtr]$office,[string]$ext){
+ $root=RootFromHandle $office
+ $all=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+ $rows=@()
+ for($i=0;$i -lt $all.Count;$i++){
+  $e=$all.Item($i)
+  try{
+   $n=$e.Current.Name
+   $aid=$e.Current.AutomationId
+   if($e.Current.IsOffscreen){continue}
+   $match=$false
+   if($ext -eq '.pptx'){
+    if(($n -and $n -match '(?i)PPTX.*analy|analy.*PPTX') -or ($aid -and $aid -match '(?i)TaskpaneButton')){$match=$true}
+   }else{
+    if(($n -and $n -match '(?i)Excel.*analy|analy.*Excel') -or ($aid -and $aid -match '(?i)TaskpaneButton')){$match=$true}
+   }
+   if(!$match){continue}
+   $r=$e.Current.BoundingRectangle
+   if($r.Width -gt 0 -and $r.Height -gt 0){
+    $rows += [pscustomobject]@{Name=$n;Id=$aid;Element=$e;X=[int]$r.X;Y=[int]$r.Y;W=[int]$r.Width;H=[int]$r.Height}
+   }
+  }catch{}
+ }
+ return $rows
+}
 function Ensure-AnalyzerPane([IntPtr]$office,[string]$ext){
- if(@(Find-VisibleByName $office $KStart $false).Count -gt 0){return}
+ if(@(Find-VisibleByName $office $KStart $false).Count -gt 0){
+  Log 'ANALYZER_PANE already open'
+  return
+ }
+ [CSNative]::SetForegroundWindow($office)|Out-Null
+ Start-Sleep -Milliseconds 600
+
  $label=if($ext -eq '.pptx'){'PPTX analyzer'}else{'Excel analyzer'}
- $hits=@(Find-VisibleByName $office $label $false)
- if($hits.Count -ne 1){throw ('Analyzer ribbon button not uniquely found: '+$label+' count='+$hits.Count)}
- $null=Activate-Element $hits[0] $false
- $deadline=(Get-Date).AddSeconds($Script:Config.AnalyzerOpenTimeoutSec)
+ $deadline=(Get-Date).AddSeconds([Math]::Max(30,$Script:Config.AnalyzerOpenTimeoutSec))
+ $hits=@()
+ $lastCount=-1
  while((Get-Date)-lt $deadline){
   Stop-IfRequested
-  if(@(Find-VisibleByName $office $KStart $false).Count -gt 0){return}
+  if(@(Find-VisibleByName $office $KStart $false).Count -gt 0){
+   Log 'ANALYZER_PANE appeared while waiting'
+   return
+  }
+
+  $hits=@(Find-AnalyzerCandidates $office $ext)
+  if($hits.Count -ne $lastCount){
+   Log ('ANALYZER_CANDIDATES '+$label+' count='+$hits.Count)
+   foreach($h in $hits){Log ('  candidate name="'+$h.Name+'" id="'+$h.Id+'" rect='+$h.X+','+$h.Y+','+$h.W+','+$h.H)}
+   $lastCount=$hits.Count
+  }
+  if($hits.Count -eq 1){break}
+
+  # Office add-in ribbon buttons can load a few seconds after the document window appears.
+  Start-Sleep -Milliseconds 500
+ }
+
+ if($hits.Count -eq 0){throw ('Analyzer ribbon button not found after waiting: '+$label)}
+ if($hits.Count -gt 1){
+  # Prefer the exact visible label, then a named candidate over an AutomationId-only candidate.
+  $exact=@($hits|Where-Object {$_.Name -eq $label})
+  if($exact.Count -eq 1){$hits=$exact}
+  else{
+   $named=@($hits|Where-Object {-not [string]::IsNullOrWhiteSpace($_.Name)})
+   if($named.Count -eq 1){$hits=$named}
+  }
+ }
+ if($hits.Count -ne 1){throw ('Analyzer ribbon button remained ambiguous: '+$label+' count='+$hits.Count)}
+
+ Log ('ANALYZER_OPEN '+$label)
+ $null=Activate-Element $hits[0] $false
+
+ $deadline=(Get-Date).AddSeconds([Math]::Max(30,$Script:Config.AnalyzerOpenTimeoutSec))
+ while((Get-Date)-lt $deadline){
+  Stop-IfRequested
+  if(@(Find-VisibleByName $office $KStart $false).Count -gt 0){
+   Log 'ANALYZER_PANE ready'
+   return
+  }
   Start-Sleep -Milliseconds 250
  }
  throw 'Analyzer task pane did not expose the start button in time.'
@@ -302,8 +370,8 @@ function Walk-Folder([IntPtr]$explorer,[string]$logical,[int]$depth){
 }
 
 Write-Host ''
-Write-Host 'CloudSave Full UI Agent v2.0'
-Write-Host 'End-to-end state machine: Explorer -> Office -> Analyzer -> Login-if-needed -> Analysis -> Close -> recurse.'
+Write-Host 'CloudSave Full UI Agent v2.1'
+Write-Host 'End-to-end state machine with delayed Office add-in discovery and recovery.'
 Write-Host 'Emergency stop: press F12 at any time.'
 Write-Host 'IMPORTANT: open the desired START folder in File Explorer before running.'
 Write-Host ''

@@ -1,0 +1,15 @@
+{
+  "name": "cloudsave-batch",
+  "version": "0.1.0",
+  "description": "CloudSave batch agent for scanning and uploading Office files",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "scan": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

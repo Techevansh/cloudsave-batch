@@ -11,10 +11,23 @@ internal static class NativeMethods
     private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
     private const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
+    // Waking Chromium/WebView2 accessibility: a UIA client asking a window for its
+    // root object (WM_GETOBJECT + UiaRootObjectId) prompts the renderer to build its
+    // accessibility tree. This is the non-intrusive way to make the Office.js task
+    // pane expose its content to UI Automation (no clicks).
+    private const uint WM_GETOBJECT = 0x003D;
+    private static readonly IntPtr UiaRootObjectId = new(-25);
+
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hWnd);
@@ -82,4 +95,22 @@ internal static class NativeMethods
     }
 
     public static bool IsF12Down() => (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
+
+    /// <summary>All descendant child windows of a parent (EnumChildWindows recurses into grandchildren too).</summary>
+    public static IReadOnlyList<WindowInfo> GetChildWindows(IntPtr parent)
+    {
+        var list = new List<WindowInfo>();
+        EnumChildWindows(parent, (h, _) =>
+        {
+            list.Add(new WindowInfo(h, ClassOf(h), TitleOf(h)));
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
+    /// <summary>Prompt a window to build its UIA/accessibility tree (wakes Chromium/WebView2 content).</summary>
+    public static void WakeAccessibility(IntPtr h)
+    {
+        try { SendMessageW(h, WM_GETOBJECT, IntPtr.Zero, UiaRootObjectId); } catch { /* best effort */ }
+    }
 }

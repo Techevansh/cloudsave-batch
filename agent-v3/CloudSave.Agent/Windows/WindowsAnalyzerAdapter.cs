@@ -75,20 +75,24 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
             throw new AgentOperationException(ErrorCodes.AnalyzerButtonNotFound,
                 $"Analyzer ribbon button not found: {label}.");
 
-        // Phase 2: wait for the task-pane start button to expose.
+        // Phase 2: wait for the task-pane start button to expose. The Office.js pane
+        // is a WebView2 whose accessibility tree is not built until prompted, so nudge
+        // it awake (WM_GETOBJECT) and keep the Office window foreground on each poll.
         deadline = DateTime.UtcNow + _options.AnalyzerOpenTimeout;
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            NativeMethods.BringToForeground(session.WindowHandle);
+            WakeTaskPane(session);
             if (FindStartButton(session, cancellationToken) is not null)
             {
                 await _events.WriteAsync(AgentEvent.Info("analyzer.pane", "Task pane ready"), cancellationToken).ConfigureAwait(false);
                 return;
             }
-            NativeMethods.BringToForeground(session.WindowHandle);
-            Thread.Sleep(400);
+            Thread.Sleep(500);
         }
 
+        await DumpTaskPaneDiagnosticsAsync(session, cancellationToken).ConfigureAwait(false);
         throw new AgentOperationException(ErrorCodes.AnalyzerTaskpaneTimeout,
             "Analyzer task pane did not expose the start button in time.");
     }
@@ -98,6 +102,7 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
         var start = FindStartButton(session, cancellationToken)
             ?? throw new AgentOperationException(ErrorCodes.AnalysisButtonNotFound, "Structure-analysis start button not visible.");
 
+        WakeTaskPane(session);
         var baseline = TopLevelTitles();
         Uia.Activate(start);
         await _events.WriteAsync(AgentEvent.Info("analysis.start", session.Title), cancellationToken).ConfigureAwait(false);
@@ -112,7 +117,7 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
             cancellationToken.ThrowIfCancellationRequested();
 
             var startVisible = FindStartButton(session, cancellationToken) is not null;
-            var busyVisible = FindInOfficeBounds(session, h => h.Name == Strings.Analyzing, cancellationToken).Count > 0;
+            var busyVisible = FindInOfficeBounds(session, h => h.Name.Contains(Strings.Analyzing, StringComparison.Ordinal), cancellationToken).Count > 0;
             var doneVisible = FindInOfficeBounds(session, h => h.Name.Contains(Strings.ReportDone, StringComparison.Ordinal), cancellationToken).Count > 0;
             var stopVisible = FindInOfficeBounds(session, h => h.Name.Contains(Strings.InspectStopped, StringComparison.Ordinal), cancellationToken).Count > 0;
 
@@ -187,8 +192,71 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
         }, ct);
     }
 
+    // Contains, not exact: the HTML button reads "🔍 구조 분석 시작" (emoji + text), so its
+    // accessible name may carry the emoji/whitespace. Match on the core phrase.
     private UiaHit? FindStartButton(OfficeSession session, CancellationToken ct) =>
-        FindInOfficeBounds(session, h => h.Name == Strings.AnalysisStart, ct).FirstOrDefault();
+        FindInOfficeBounds(session, h => h.Name.Contains(Strings.AnalysisStart, StringComparison.Ordinal), ct).FirstOrDefault();
+
+    /// <summary>Prompt the Office window and its WebView2 child windows to build their accessibility trees.</summary>
+    private static void WakeTaskPane(OfficeSession session)
+    {
+        NativeMethods.WakeAccessibility(session.WindowHandle);
+        foreach (var c in NativeMethods.GetChildWindows(session.WindowHandle))
+        {
+            var cls = c.ClassName;
+            if (cls.Contains("Chrome", StringComparison.OrdinalIgnoreCase)
+                || cls.Contains("WebView", StringComparison.OrdinalIgnoreCase)
+                || cls.Contains("Widget", StringComparison.OrdinalIgnoreCase)
+                || cls.Contains("EdgeWebView", StringComparison.OrdinalIgnoreCase))
+            {
+                NativeMethods.WakeAccessibility(c.Handle);
+            }
+        }
+    }
+
+    /// <summary>On task-pane timeout, log what IS exposed near the pane so the real cause is visible from one run.</summary>
+    private async Task DumpTaskPaneDiagnosticsAsync(OfficeSession session, CancellationToken ct)
+    {
+        try
+        {
+            var b = OfficeBounds(session);
+            await _events.WriteAsync(AgentEvent.Warn("analyzer.diag", ErrorCodes.AnalyzerTaskpaneTimeout,
+                $"office bounds = X={b.X:0} Y={b.Y:0} W={b.Width:0} H={b.Height:0}"), ct).ConfigureAwait(false);
+
+            var kids = NativeMethods.GetChildWindows(session.WindowHandle)
+                .Select(k => k.ClassName)
+                .Where(c => c.Contains("Chrome", StringComparison.OrdinalIgnoreCase)
+                         || c.Contains("WebView", StringComparison.OrdinalIgnoreCase)
+                         || c.Contains("Widget", StringComparison.OrdinalIgnoreCase))
+                .Distinct()
+                .ToList();
+            await _events.WriteAsync(AgentEvent.Warn("analyzer.diag", ErrorCodes.AnalyzerTaskpaneTimeout,
+                $"web/child window classes: {(kids.Count > 0 ? string.Join(", ", kids) : "(none)")}"), ct).ConfigureAwait(false);
+
+            // Named elements in the right portion of the Office window (where the pane sits).
+            var region = b.IsEmpty ? System.Windows.Rect.Empty
+                : new System.Windows.Rect(b.X + b.Width * 0.50, b.Y, b.Width * 0.50, b.Height);
+            var named = Uia.Collect(Uia.Root, h =>
+            {
+                if (h.IsOffscreen || string.IsNullOrWhiteSpace(h.Name) || h.Rect is not { Width: > 0, Height: > 0 }) return false;
+                if (region.IsEmpty) return true;
+                return region.Contains(h.Rect.X + h.Rect.Width / 2, h.Rect.Y + h.Rect.Height / 2);
+            }, ct);
+
+            await _events.WriteAsync(AgentEvent.Warn("analyzer.diag", ErrorCodes.AnalyzerTaskpaneTimeout,
+                $"named elements in pane region: {named.Count}"), ct).ConfigureAwait(false);
+            foreach (var h in named.Take(30))
+            {
+                await _events.WriteAsync(AgentEvent.Warn("analyzer.diag", ErrorCodes.AnalyzerTaskpaneTimeout,
+                    $"  [{h.ControlType}] \"{h.Name}\" rect={h.Rect.X:0},{h.Rect.Y:0},{h.Rect.Width:0},{h.Rect.Height:0}"), ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            await _events.WriteAsync(AgentEvent.Warn("analyzer.diag", ErrorCodes.AnalyzerTaskpaneTimeout,
+                $"diagnostics failed: {ex.Message}"), CancellationToken.None).ConfigureAwait(false);
+        }
+    }
 
     private List<UiaHit> FindRibbonAnalyzer(OfficeSession session, string label, CancellationToken ct)
     {

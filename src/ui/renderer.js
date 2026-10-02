@@ -6,37 +6,49 @@ const results = document.getElementById("results");
 const summary = document.getElementById("summary");
 const rootLabel = document.getElementById("rootLabel");
 
+function updateScanButton() {
+  scanFolderButton.disabled = folderPath.value.trim().length === 0;
+}
+
+folderPath.addEventListener("input", () => {
+  updateScanButton();
+  message.textContent = folderPath.value.trim()
+    ? "입력한 경로를 구조 판독할 수 있습니다."
+    : "폴더를 선택하거나 U:\\ 같은 경로를 직접 입력하세요.";
+});
+
+folderPath.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !scanFolderButton.disabled) scanFolderButton.click();
+});
+
 selectFolderButton.addEventListener("click", async () => {
   const selectedPath = await window.cloudsave.selectFolder();
-
   if (!selectedPath) return;
-
   folderPath.value = selectedPath;
-  scanFolderButton.disabled = false;
+  updateScanButton();
   message.textContent = "폴더가 선택되었습니다. 구조 판독을 시작할 수 있습니다.";
 });
 
 scanFolderButton.addEventListener("click", async () => {
-  const target = folderPath.value;
-
+  const target = folderPath.value.trim();
   if (!target) return;
-
   scanFolderButton.disabled = true;
   selectFolderButton.disabled = true;
+  folderPath.disabled = true;
   message.textContent = "폴더 구조를 판독하고 있습니다...";
   results.className = "results";
   results.textContent = "Scanning...";
-
   try {
     const result = await window.cloudsave.scanFolder(target);
     renderResult(result);
     message.textContent = "구조 판독이 완료되었습니다.";
   } catch (error) {
     results.textContent = `판독 실패: ${error.message}`;
-    message.textContent = "오류가 발생했습니다.";
+    message.textContent = "경로를 확인하세요. 예: U:\\ 또는 U:\\공유 폴더";
   } finally {
-    scanFolderButton.disabled = false;
+    folderPath.disabled = false;
     selectFolderButton.disabled = false;
+    updateScanButton();
   }
 });
 
@@ -48,22 +60,14 @@ function renderResult(result) {
   document.getElementById("xlsCount").textContent = result.summary.xls;
   summary.classList.remove("hidden");
   rootLabel.textContent = result.root;
-
   results.replaceChildren();
-
   if (result.folders.length === 0 && result.files.length === 0) {
     results.classList.add("empty");
     results.textContent = "판독할 폴더 또는 지원되는 Office 파일이 없습니다.";
     return;
   }
-
-  for (const folder of result.folders) {
-    appendLine("DIR ", folder.relativePath, "dir");
-  }
-
-  for (const file of result.files) {
-    appendLine("FILE", `${file.relativePath}  (${formatBytes(file.size)})`, "file");
-  }
+  for (const folder of result.folders) appendLine("DIR ", folder.relativePath, "dir");
+  for (const file of result.files) appendLine("FILE", `${file.relativePath}  (${formatBytes(file.size)})`, "file");
 }
 
 function appendLine(type, text, className) {
@@ -80,3 +84,5 @@ function formatBytes(bytes) {
   const value = bytes / 1024 ** index;
   return `${value.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 }
+
+updateScanButton();

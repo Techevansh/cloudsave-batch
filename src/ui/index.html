@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CloudSave Batch</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header>
+      <div>
+        <p class="eyebrow">CLOUDSAVE BATCH · v0.3</p>
+        <h1>Office 구조 판독</h1>
+        <p class="subtitle">지정한 폴더의 구조와 PPTX, XLSX, XLS 파일을 판독합니다.</p>
+      </div>
+      <div class="status-badge">LOCAL SCANNER</div>
+    </header>
+
+    <section class="panel">
+      <label for="folderPath">대상 폴더</label>
+      <div class="folder-row">
+        <input id="folderPath" type="text" placeholder="폴더를 선택하세요" readonly />
+        <button id="selectFolder" class="secondary">폴더 선택</button>
+      </div>
+      <button id="scanFolder" class="primary" disabled>구조 판독 시작</button>
+      <p id="message" class="message">먼저 판독할 폴더를 선택하세요.</p>
+    </section>
+
+    <section id="summary" class="summary hidden">
+      <article><strong id="folderCount">0</strong><span>Folders</span></article>
+      <article><strong id="fileCount">0</strong><span>Office files</span></article>
+      <article><strong id="pptxCount">0</strong><span>PPTX</span></article>
+      <article><strong id="xlsxCount">0</strong><span>XLSX</span></article>
+      <article><strong id="xlsCount">0</strong><span>XLS</span></article>
+    </section>
+
+    <section class="results-panel">
+      <div class="results-title">
+        <h2>판독 결과</h2>
+        <span id="rootLabel">대상 폴더를 선택하면 결과가 표시됩니다.</span>
+      </div>
+      <div id="results" class="results empty">아직 판독 결과가 없습니다.</div>
+    </section>
+  </main>
+  <script src="./renderer.js"></script>
+</body>
+</html>

@@ -18,9 +18,12 @@ echo  1) Put ONE .pptx in a small test folder.
 echo  2) Open that folder in Windows File Explorer and keep it visible.
 echo  3) Emergency stop at any time: press F12.
 echo ------------------------------------------------------------
-echo  Press any key to start...
-pause >nul
+echo  Starting automatically in 10 seconds...
+echo  (no key needed - just make sure the Explorer folder is open)
+timeout /t 10
 
+echo.
+echo  Running... watch Explorer / PowerPoint on screen.
 cloudsave-agent.exe 1> milestone-log.jsonl 2>&1
 
 echo.
@@ -33,4 +36,5 @@ echo.
 echo ----- log -----
 type milestone-log.jsonl
 echo.
-pause
+echo  (this window stays open - close it when done)
+timeout /t 86400 >nul

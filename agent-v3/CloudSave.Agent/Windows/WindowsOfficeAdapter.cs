@@ -74,9 +74,15 @@ internal sealed class WindowsOfficeAdapter : IOfficeAdapter
     {
         try
         {
+            // Match the "Don't Save" button robustly across Office builds, while never
+            // matching the plain "저장"/"Save" or "다른 이름으로 저장"/"Save As" buttons:
+            //   "저장 안 함", "저장 안함"  -> both contain "저장 안"
+            //   "Don't Save"               -> case-insensitive contains
             var hit = Uia.Collect(Uia.Root, h =>
                     h.ControlType == "ControlType.Button" && !h.IsOffscreen &&
-                    (h.Name == Strings.DontSave || h.Name == Strings.DontSaveEn),
+                    (h.Name.Contains("저장 안", StringComparison.Ordinal)
+                     || h.Name.Contains("Don't Save", StringComparison.OrdinalIgnoreCase)
+                     || h.Name.Contains("Don’t Save", StringComparison.OrdinalIgnoreCase)),
                 CancellationToken.None, attempts: 1).FirstOrDefault();
             if (hit is not null)
             {

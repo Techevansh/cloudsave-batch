@@ -23,10 +23,6 @@ function Activate-El($el){
   ([System.Windows.Automation.ExpandCollapsePattern]$p).Expand(); return 'ExpandCollapsePattern'
  }
  $p=$null
- if($el.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$p)){
-  ([System.Windows.Automation.LegacyIAccessiblePattern]$p).DoDefaultAction(); return 'LegacyIAccessiblePattern'
- }
- $p=$null
  if($el.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$p)){
   ([System.Windows.Automation.SelectionItemPattern]$p).Select(); return 'SelectionItemPattern'
  }
@@ -50,7 +46,7 @@ function Get-VisibleNamedElements {
 }
 
 Write-Host ''
-Write-Host 'CloudSave PPTX Analyzer Menu Probe v0.8.2'
+Write-Host 'CloudSave PPTX Analyzer Menu Probe v0.8.3'
 Write-Host 'TARGET: the PPTX analyzer button shown in the Document Tools area.'
 Write-Host 'GUARDED ACTION: opens PowerPoint Add-ins menu only; PPTX analyzer itself is NOT clicked.'
 Write-Host ''

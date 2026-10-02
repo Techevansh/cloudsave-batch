@@ -24,24 +24,24 @@ function Dump([System.Windows.Automation.AutomationElement]$root){
  return $rows
 }
 Write-Host ''
-Write-Host 'CloudSave PowerPoint Add-in Surface Probe v0.7'
+Write-Host 'CloudSave PowerPoint Add-in Surface Probe v0.7.1'
 Write-Host 'READ-ONLY. No click, no keyboard, no CloudSave execution.'
 Write-Host ''
 $wins=@(Get-Ppt)
 if(!$wins){throw 'No PowerPoint window found.'}
+$rx='Cloud|Save|Add-in|Office Add'
 foreach($w in $wins){
  Write-Host ('WINDOW: '+$w.Current.Name)
  $rows=@(Dump $w)
  Write-Host ('UI elements: '+$rows.Count)
- $interesting=@($rows|? { $_.N -match 'Cloud|Save|클라우드|저장|Add-in|추가 기능|추가기능|Office Add' -or $_.A -match 'Cloud|Addin|TaskPane|WebView' -or $_.C -match 'WebView|Internet Explorer|Chrome' })
+ $interesting=@($rows | Where-Object { ($_.N -match $rx) -or ($_.A -match 'Cloud|Addin|TaskPane|WebView') -or ($_.C -match 'WebView|Internet Explorer|Chrome') })
  if($interesting.Count){
   Write-Host '--- add-in/save/cloud candidates ---'
   $i=0;foreach($r in $interesting){$i++;Write-Host ('['+$i+'] '+$r.T+' | name="'+$r.N+'" | id="'+$r.A+'" | class="'+$r.C+'" | rect='+$r.X+','+$r.Y+','+$r.W+','+$r.H)}
  }else{Write-Host 'No named add-in/cloud candidate exposed.'}
  Write-Host '--- non-empty controls near PowerPoint chrome (first 140) ---'
  $i=0
- foreach($r in ($rows|? {$_.Y -ge 0 -and $_.Y -lt 500}|select -First 140)){$i++;Write-Host ('['+$i+'] '+$r.T+' | "'+$r.N+'" | id="'+$r.A+'" | '+$r.X+','+$r.Y+','+$r.W+','+$r.H)}
+ foreach($r in ($rows|Where-Object {$_.Y -ge 0 -and $_.Y -lt 500}|Select-Object -First 140)){$i++;Write-Host ('['+$i+'] '+$r.T+' | "'+$r.N+'" | id="'+$r.A+'" | '+$r.X+','+$r.Y+','+$r.W+','+$r.H)}
 }
 Write-Host ''
 Write-Host 'RESULT: probe completed. Nothing was activated.'
-Write-Host 'NEXT: use the exposed ribbon/task-pane identifiers; if absent, inspect the add-in surface separately.'

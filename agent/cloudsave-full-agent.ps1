@@ -382,13 +382,19 @@ function Find-GlobalVisibleName([IntPtr]$OfficeHandle, [string]$Name, [bool]$Con
     $OfficeRect = Get-WindowRect $OfficeHandle
     if ($null -eq $OfficeRect) { return @() }
 
-    $Desktop = [System.Windows.Automation.AutomationElement]::RootElement
-    $All = $Desktop.FindAll(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.Condition]::TrueCondition
-    )
-
     $Rows = @()
+
+    try {
+        $Desktop = [System.Windows.Automation.AutomationElement]::RootElement
+        $All = $Desktop.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition
+        )
+    } catch {
+        Log ('UIA_RETRY desktop FindAll failed: ' + $_.Exception.Message)
+        Start-Sleep -Milliseconds 500
+        return @()
+    }
 
     for ($i = 0; $i -lt $All.Count; $i++) {
         $Element = $All.Item($i)
@@ -509,6 +515,7 @@ function Ensure-AnalyzerPane([IntPtr]$OfficeHandle, [string]$Ext) {
     Log ('ANALYZER_OPEN ' + $Label)
     $Method = Activate-Element $Candidate $false
     Log ('ANALYZER_OPEN_METHOD ' + $Method)
+    Start-Sleep -Milliseconds 1500
 
     $Deadline = (Get-Date).AddSeconds($Script:Config.AnalyzerPaneTimeoutSec)
 
@@ -785,8 +792,8 @@ function Walk-Folder([IntPtr]$ExplorerHandle, [string]$LogicalPath, [int]$Depth)
 }
 
 Write-Host ''
-Write-Host 'CloudSave Full UI Agent v2.4'
-Write-Host 'Task-pane global UIA discovery + safe Office close prompt handling.'
+Write-Host 'CloudSave Full UI Agent v2.5'
+Write-Host 'Resilient task-pane UIA discovery with retry + safe Office close prompt handling.'
 Write-Host 'Emergency stop: press F12 at any time.'
 Write-Host 'Open the desired START folder in File Explorer before running.'
 Write-Host ''

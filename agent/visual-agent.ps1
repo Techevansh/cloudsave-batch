@@ -66,7 +66,7 @@ function Open-ThisPC {
  Start-Sleep -Milliseconds 1200
  return $h
 }
-function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=48){
+function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=75){
  $r=New-Object CloudSaveVision+RECT
  [CloudSaveVision]::GetWindowRect($h,[ref]$r)|Out-Null
  $w=$r.Right-$r.Left;$hh=$r.Bottom-$r.Top
@@ -75,8 +75,8 @@ function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=48){
  $g=[Drawing.Graphics]::FromImage($shot);$g.CopyFromScreen($r.Left,$r.Top,0,0,$shot.Size);$g.Dispose()
  $tpl=[Drawing.Bitmap]::FromFile($Template)
  $m=[CloudSaveVision]::Match($shot,$tpl);$tw=$tpl.Width;$th=$tpl.Height;$tpl.Dispose();$shot.Dispose()
- Write-Host ('   '+$Label+' score: '+$m[2])
- if($m[2] -gt $Threshold){throw ($Label+' was not matched confidently. Nothing was clicked.')}
+ Write-Host ('   '+$Label+' score: '+$m[2]+' / threshold: '+$Threshold)
+ if($m[2] -gt $Threshold){throw ($Label+' visual score was too weak ('+$m[2]+'). Nothing was clicked.')}
  $x=$r.Left+$m[0]+[int]($tw/2);$y=$r.Top+$m[1]+[int]($th/2)
  Write-Host ('   MATCH '+$Label+': '+$x+','+$y)
  [CloudSaveVision]::SetForegroundWindow($h)|Out-Null;Start-Sleep -Milliseconds 200
@@ -85,7 +85,7 @@ function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=48){
 }
 
 Write-Host ''
-Write-Host 'CloudSave Visual Navigator v0.12'
+Write-Host 'CloudSave Visual Navigator v0.12.1'
 Write-Host 'No Explorer preparation is required.'
 $vtw='C:\cloudsave-batch\agent\templates\vtw-server-u.png'
 if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}

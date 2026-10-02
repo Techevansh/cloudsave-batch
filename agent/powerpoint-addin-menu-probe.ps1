@@ -18,28 +18,27 @@ function Invoke-El($el){
  if($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$p)){([System.Windows.Automation.InvokePattern]$p).Invoke();return $true}
  return $false
 }
-function Dump-MenuCandidates {
+function Get-VisibleNamedElements {
  $root=[System.Windows.Automation.AutomationElement]::RootElement
  $all=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
  $rows=@()
  for($i=0;$i -lt $all.Count;$i++){
   $e=$all.Item($i)
   try{
-   $n=$e.Current.Name;$aid=$e.Current.AutomationId;$cls=$e.Current.ClassName;$ct=$e.Current.ControlType.ProgrammaticName
-   if([string]::IsNullOrWhiteSpace($n)){continue}
-   if($n -match 'Cloud|Save|추가 기능|내 추가 기능|Office' -or $aid -match 'Cloud|Addin|Extension'){
-    $r=$e.Current.BoundingRectangle
-    $rows += [pscustomobject]@{Element=$e;N=$n;A=$aid;C=$cls;T=$ct;X=[int]$r.X;Y=[int]$r.Y;W=[int]$r.Width;H=[int]$r.Height}
-   }
+   $n=$e.Current.Name
+   if([string]::IsNullOrWhiteSpace($n) -or $e.Current.IsOffscreen){continue}
+   $r=$e.Current.BoundingRectangle
+   if($r.Width -le 0 -or $r.Height -le 0){continue}
+   $rows += [pscustomobject]@{N=$n;A=$e.Current.AutomationId;C=$e.Current.ClassName;T=$e.Current.ControlType.ProgrammaticName;X=[int]$r.X;Y=[int]$r.Y;W=[int]$r.Width;H=[int]$r.Height}
   }catch{}
  }
  return $rows
 }
 
 Write-Host ''
-Write-Host 'CloudSave Add-in Menu Probe v0.8'
-Write-Host 'GUARDED ACTION: opens PowerPoint Add-ins menu only.'
-Write-Host 'It will NOT click CloudSave and will NOT save/upload anything.'
+Write-Host 'CloudSave PPTX Analyzer Menu Probe v0.8.1'
+Write-Host 'TARGET: the PPTX analyzer button shown in the Document Tools area.'
+Write-Host 'GUARDED ACTION: opens PowerPoint Add-ins menu only; PPTX analyzer itself is NOT clicked.'
 Write-Host ''
 
 $wins=@(Get-Ppt)
@@ -51,24 +50,21 @@ Write-Host ('PowerPoint: '+$target.Current.Name)
 $button=Find-ById $target 'OfficeExtensionsShowAddinFlyout'
 if(!$button){throw 'PowerPoint Add-ins button was not found by AutomationId.'}
 Write-Host ('Found Add-ins button: '+$button.Current.Name+' | id='+$button.Current.AutomationId)
-Write-Host 'Opening Add-ins menu through UI Automation InvokePattern...'
 if(!(Invoke-El $button)){throw 'Add-ins button does not expose InvokePattern.'}
 Start-Sleep -Milliseconds 1200
 
-$candidates=@(Dump-MenuCandidates)
-Write-Host ('Menu/add-in candidates found: '+$candidates.Count)
+$rows=@(Get-VisibleNamedElements)
+$wanted=@($rows | Where-Object {$_.N -match 'PPTX|analy|문서도구|CloudSave|Cloud Save|추가 기능|Office'})
+Write-Host ('Relevant visible candidates: '+$wanted.Count)
 $i=0
-foreach($r in $candidates){
- $i++
- Write-Host ('['+$i+'] '+$r.T+' | name="'+$r.N+'" | id="'+$r.A+'" | class="'+$r.C+'" | rect='+$r.X+','+$r.Y+','+$r.W+','+$r.H)
-}
-$cloud=@($candidates | Where-Object {$_.N -match 'CloudSave|Cloud Save'})
-if($cloud.Count){
- Write-Host ''
- Write-Host ('SUCCESS: CloudSave candidate detected: '+$cloud[0].N)
- Write-Host 'SAFE STOP: CloudSave was NOT clicked.'
+foreach($r in $wanted){$i++;Write-Host ('['+$i+'] '+$r.T+' | name="'+$r.N+'" | id="'+$r.A+'" | class="'+$r.C+'" | rect='+$r.X+','+$r.Y+','+$r.W+','+$r.H)}
+
+$pptx=@($rows | Where-Object {$_.N -match 'PPTX.*analy|analy.*PPTX|PPTX'})
+Write-Host ''
+if($pptx.Count){
+ Write-Host ('SUCCESS: PPTX analyzer candidate detected: '+$pptx[0].N)
+ Write-Host 'SAFE STOP: PPTX analyzer was NOT clicked.'
 }else{
- Write-Host ''
- Write-Host 'RESULT: Add-ins menu opened, but no named CloudSave candidate is exposed yet.'
+ Write-Host 'RESULT: menu opened, but the PPTX analyzer name is not exposed in the expanded UI yet.'
  Write-Host 'SAFE STOP: no further UI action was performed.'
 }

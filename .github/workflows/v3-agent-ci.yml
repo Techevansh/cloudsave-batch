@@ -35,6 +35,10 @@ jobs:
       - name: Publish self-contained Windows build
         run: dotnet publish agent-v3/CloudSave.Agent/CloudSave.Agent.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/cloudsave-agent
 
+      - name: Add milestone launcher to artifact
+        shell: pwsh
+        run: Copy-Item agent-v3/Run-Milestone-SinglePPTX.bat artifacts/cloudsave-agent/
+
       - uses: actions/upload-artifact@v4
         with:
           name: cloudsave-agent-win-x64

@@ -68,6 +68,7 @@ $KFolder = U @(0xD30C,0xC77C,0x20,0xD3F4,0xB354)
 $KBack   = U @(0xB4A4,0xB85C)
 $KStart  = U @(0xAD6C,0xC870,0x20,0xBD84,0xC11D,0x20,0xC2DC,0xC791)
 $KBusy   = U @(0xBD84,0xC11D,0x20,0xC911,0x2E,0x2E,0x2E)
+$KDontSave = U @(0xC800,0xC7A5,0x20,0xC548,0x20,0xD568)
 
 $Script:Config = [pscustomobject]@{
     MaxDepth = 10
@@ -367,6 +368,67 @@ function Find-VisibleExactName([IntPtr]$Handle, [string]$Name) {
     return $Rows
 }
 
+function Get-WindowRect([IntPtr]$Handle) {
+    try {
+        $Root = RootFromHandle $Handle
+        $Rect = $Root.Current.BoundingRectangle
+        return [pscustomobject]@{ X=[int]$Rect.X; Y=[int]$Rect.Y; W=[int]$Rect.Width; H=[int]$Rect.Height }
+    } catch {
+        return $null
+    }
+}
+
+function Find-GlobalVisibleName([IntPtr]$OfficeHandle, [string]$Name, [bool]$Contains = $false) {
+    $OfficeRect = Get-WindowRect $OfficeHandle
+    if ($null -eq $OfficeRect) { return @() }
+
+    $Desktop = [System.Windows.Automation.AutomationElement]::RootElement
+    $All = $Desktop.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition
+    )
+
+    $Rows = @()
+
+    for ($i = 0; $i -lt $All.Count; $i++) {
+        $Element = $All.Item($i)
+        try {
+            if ($Element.Current.IsOffscreen) { continue }
+            $CurrentName = $Element.Current.Name
+            if ([string]::IsNullOrWhiteSpace($CurrentName)) { continue }
+
+            $Matches = if ($Contains) { $CurrentName.Contains($Name) } else { $CurrentName -eq $Name }
+            if (!$Matches) { continue }
+
+            $Rect = $Element.Current.BoundingRectangle
+            if ($Rect.Width -le 0 -or $Rect.Height -le 0) { continue }
+
+            $CenterX = [double]$Rect.X + ([double]$Rect.Width / 2.0)
+            $CenterY = [double]$Rect.Y + ([double]$Rect.Height / 2.0)
+
+            if (
+                $CenterX -lt $OfficeRect.X -or
+                $CenterX -gt ($OfficeRect.X + $OfficeRect.W) -or
+                $CenterY -lt $OfficeRect.Y -or
+                $CenterY -gt ($OfficeRect.Y + $OfficeRect.H)
+            ) { continue }
+
+            $Rows += [pscustomobject]@{
+                Name=$CurrentName
+                Id=$Element.Current.AutomationId
+                Type=$Element.Current.ControlType.ProgrammaticName
+                Element=$Element
+                X=[int]$Rect.X
+                Y=[int]$Rect.Y
+                W=[int]$Rect.Width
+                H=[int]$Rect.Height
+            }
+        } catch {}
+    }
+
+    return $Rows
+}
+
 function Find-AnalyzerCandidates([IntPtr]$Handle, [string]$Ext) {
     $Regex = if ($Ext -eq '.pptx') {
         '(?i)^PPTX\s*analyzer$|PPTX.*analy|analy.*PPTX'
@@ -396,7 +458,7 @@ function Select-AnalyzerCandidate($Candidates, [string]$Label) {
 function Ensure-AnalyzerPane([IntPtr]$OfficeHandle, [string]$Ext) {
     Prepare-OfficeWindow $OfficeHandle
 
-    $StartVisible = @(Find-VisibleExactName $OfficeHandle $KStart)
+    $StartVisible = @(Find-GlobalVisibleName $OfficeHandle $KStart $false)
     if ($StartVisible.Count -gt 0) {
         Log 'ANALYZER_PANE already open'
         return
@@ -411,7 +473,7 @@ function Ensure-AnalyzerPane([IntPtr]$OfficeHandle, [string]$Ext) {
         Stop-IfRequested
         Prepare-OfficeWindow $OfficeHandle
 
-        $StartVisible = @(Find-VisibleExactName $OfficeHandle $KStart)
+        $StartVisible = @(Find-GlobalVisibleName $OfficeHandle $KStart $false)
         if ($StartVisible.Count -gt 0) {
             Log 'ANALYZER_PANE appeared while waiting'
             return
@@ -453,7 +515,7 @@ function Ensure-AnalyzerPane([IntPtr]$OfficeHandle, [string]$Ext) {
     while ((Get-Date) -lt $Deadline) {
         Stop-IfRequested
 
-        $StartVisible = @(Find-VisibleExactName $OfficeHandle $KStart)
+        $StartVisible = @(Find-GlobalVisibleName $OfficeHandle $KStart $false)
         if ($StartVisible.Count -gt 0) {
             Log 'ANALYZER_PANE ready'
             return
@@ -469,7 +531,7 @@ function Run-Analysis([IntPtr]$OfficeHandle, [string]$LogicalPath) {
     $Ext = [IO.Path]::GetExtension($LogicalPath).ToLowerInvariant()
     Ensure-AnalyzerPane $OfficeHandle $Ext
 
-    $Start = @(Find-VisibleExactName $OfficeHandle $KStart)
+    $Start = @(Find-GlobalVisibleName $OfficeHandle $KStart $false)
     if ($Start.Count -ne 1) {
         throw ('Analysis start button count=' + $Start.Count)
     }
@@ -485,8 +547,8 @@ function Run-Analysis([IntPtr]$OfficeHandle, [string]$LogicalPath) {
     while ((Get-Date) -lt $Deadline) {
         Stop-IfRequested
 
-        $Ready = @(Find-VisibleExactName $OfficeHandle $KStart).Count -gt 0
-        $Busy = @(Find-VisibleExactName $OfficeHandle $KBusy).Count -gt 0
+        $Ready = @(Find-GlobalVisibleName $OfficeHandle $KStart $false).Count -gt 0
+        $Busy = @(Find-GlobalVisibleName $OfficeHandle $KBusy $false).Count -gt 0
 
         if (!$Ready -or $Busy) {
             $SeenWorking = $true
@@ -533,10 +595,12 @@ function Close-Office([IntPtr]$Handle) {
     }
 
     $Deadline = (Get-Date).AddSeconds($Script:Config.CloseTimeoutSec)
+    $DismissedSavePrompt = $false
 
     while ((Get-Date) -lt $Deadline) {
-        $Exists = $false
+        Stop-IfRequested
 
+        $Exists = $false
         foreach ($Current in [CSNative]::Windows()) {
             if ($Current -eq $Handle) {
                 $Exists = $true
@@ -544,7 +608,20 @@ function Close-Office([IntPtr]$Handle) {
             }
         }
 
-        if (!$Exists) { return }
+        if (!$Exists) {
+            Log 'OFFICE_CLOSED'
+            return
+        }
+
+        if (!$DismissedSavePrompt) {
+            $DontSave = @(Find-GlobalVisibleName $Handle $KDontSave $true)
+            if ($DontSave.Count -gt 0) {
+                Log ('CLOSE_PROMPT dont-save candidates=' + $DontSave.Count)
+                $Method = Activate-Element $DontSave[0] $false
+                Log ('CLOSE_PROMPT dismissed method=' + $Method)
+                $DismissedSavePrompt = $true
+            }
+        }
 
         Start-Sleep -Milliseconds 300
     }
@@ -708,8 +785,8 @@ function Walk-Folder([IntPtr]$ExplorerHandle, [string]$LogicalPath, [int]$Depth)
 }
 
 Write-Host ''
-Write-Host 'CloudSave Full UI Agent v2.3'
-Write-Host 'Validated architecture: Explorer -> Office -> Analyzer -> Auth wait -> Analysis -> Close -> Recurse.'
+Write-Host 'CloudSave Full UI Agent v2.4'
+Write-Host 'Task-pane global UIA discovery + safe Office close prompt handling.'
 Write-Host 'Emergency stop: press F12 at any time.'
 Write-Host 'Open the desired START folder in File Explorer before running.'
 Write-Host ''

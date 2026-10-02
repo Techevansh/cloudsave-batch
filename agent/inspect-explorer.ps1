@@ -1,39 +1,58 @@
 $ErrorActionPreference='Stop'
 Write-Host ''
-Write-Host 'CloudSave Explorer UI Inspector v0.7.2'
-Write-Host 'Move the mouse over VTW Server (U:) within 10 seconds. Do not click.'
-Add-Type @'
+Write-Host 'CloudSave Explorer Accessibility Inspector v0.8'
+Write-Host 'Move the mouse over the VTW Server (U:) text or icon within 10 seconds. Do not click.'
+Write-Host ''
+
+Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public static class Win32 {
- [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
- [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+using Accessibility;
+
+public static class AccProbe {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X; public int Y; }
+
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT p);
+
+    [DllImport("oleacc.dll")]
+    private static extern int AccessibleObjectFromPoint(
+        POINT pt,
+        [MarshalAs(UnmanagedType.Interface)] out IAccessible acc,
+        [MarshalAs(UnmanagedType.Struct)] out object child);
+
+    public static string Probe() {
+        POINT p;
+        GetCursorPos(out p);
+        IAccessible acc;
+        object child;
+        int hr = AccessibleObjectFromPoint(p, out acc, out child);
+        if (hr != 0 || acc == null) return "MSAA ERROR hr=" + hr;
+
+        object childId = child ?? 0;
+        string name = "";
+        string role = "";
+        string value = "";
+        try { name = acc.get_accName(childId) ?? ""; } catch {}
+        try { role = Convert.ToString(acc.get_accRole(childId)); } catch {}
+        try { value = acc.get_accValue(childId) ?? ""; } catch {}
+
+        return "Mouse: " + p.X + "," + p.Y +
+               Environment.NewLine + "MSAA Name: " + name +
+               Environment.NewLine + "MSAA Role: " + role +
+               Environment.NewLine + "MSAA Value: " + value +
+               Environment.NewLine + "ChildId: " + Convert.ToString(childId);
+    }
 }
-'@
-Add-Type -AssemblyName WindowsBase
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-for($i=10;$i -ge 1;$i--){Write-Host ('Capture in '+$i+' seconds...');Start-Sleep -Seconds 1}
-$p=New-Object Win32+POINT
-[Win32]::GetCursorPos([ref]$p)|Out-Null
-Write-Host ('Mouse: '+$p.X+','+$p.Y)
-try{
- $point=New-Object System.Windows.Point -ArgumentList ([double]$p.X),([double]$p.Y)
- $el=[System.Windows.Automation.AutomationElement]::FromPoint($point)
- if($null -eq $el){throw 'No UI Automation element at mouse position.'}
- Write-Host ('Name: '+$el.Current.Name)
- Write-Host ('ControlType: '+$el.Current.ControlType.ProgrammaticName)
- Write-Host ('AutomationId: '+$el.Current.AutomationId)
- Write-Host ('ClassName: '+$el.Current.ClassName)
- Write-Host ('FrameworkId: '+$el.Current.FrameworkId)
- $rect=$el.Current.BoundingRectangle
- Write-Host ('Rectangle: '+[int]$rect.X+','+[int]$rect.Y+' '+[int]$rect.Width+'x'+[int]$rect.Height)
- Write-Host 'Parents:'
- $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
- $cur=$el
- for($n=0;$n -lt 8;$n++){
-  $cur=$walker.GetParent($cur);if($null -eq $cur){break}
-  Write-Host ('['+$n+'] Name='+$cur.Current.Name+' | Type='+$cur.Current.ControlType.ProgrammaticName+' | Id='+$cur.Current.AutomationId+' | Class='+$cur.Current.ClassName)
- }
-}catch{Write-Host ('ERROR: '+$_.Exception.Message)}
+'@ -ReferencedAssemblies Accessibility
+
+for($i=10;$i -ge 1;$i--){
+  Write-Host ('Capture in '+$i+' seconds...')
+  Start-Sleep -Seconds 1
+}
+
+Write-Host ''
+Write-Host ([AccProbe]::Probe())
+Write-Host ''
 Write-Host 'Inspector finished.'

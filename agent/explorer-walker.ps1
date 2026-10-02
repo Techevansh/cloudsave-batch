@@ -23,8 +23,9 @@ public static class WalkerWin {
 }
 '@
 
-function Key([string]$keys,[int]$wait=350){
- [System.Windows.Forms.SendKeys]::SendWait($keys); Start-Sleep -Milliseconds $wait
+function Key([string]$keys,[int]$wait=250){
+ [System.Windows.Forms.SendKeys]::SendWait($keys)
+ Start-Sleep -Milliseconds $wait
 }
 function Active-Explorer {
  $h=[WalkerWin]::Explorer()
@@ -35,41 +36,48 @@ function Active-Explorer {
 }
 
 Write-Host ''
-Write-Host 'CloudSave Explorer Walker v0.1'
-Write-Host 'SAFE DISCOVERY MODE - it will NOT open files or folders.'
-Write-Host 'Open the desired START folder in File Explorer before running.'
+Write-Host 'CloudSave Explorer Walker v0.2'
+Write-Host 'SAFE SINGLE-SELECTION TEST - no Ctrl+A, no file/folder open.'
+Write-Host 'IMPORTANT: while this test runs, do not type or click.'
 Write-Host ''
 
 $h=Active-Explorer
 $title=[WalkerWin]::Title($h)
 Write-Host ('Explorer detected: '+$title)
-Write-Host 'Reading visible item names by keyboard clipboard navigation...'
+Write-Host 'Selecting ONE item at a time. Clipboard is cleared before every read.'
 
-# Focus Explorer item pane without needing U: filesystem access.
-Key '^l' 200
-Key '{ESC}' 200
-Key '^a' 150
-# F6 cycles Explorer UI zones; TAB then first-item selection is more stable than mouse coordinates.
+# Never use Ctrl+A. Move focus among Explorer zones, then Home selects only one row.
 Key '{F6}' 150
 Key '{F6}' 150
 Key '{F6}' 150
-Key '{HOME}' 200
+Key '{HOME}' 250
 
 $seen=New-Object System.Collections.Generic.List[string]
-$last=''
-for($i=0;$i -lt 250;$i++){
- Key '^c' 180
+$duplicates=0
+for($i=0;$i -lt 80;$i++){
+ try{[System.Windows.Forms.Clipboard]::Clear()}catch{}
+ Key '^c' 220
  $clip=''
  try{$clip=[System.Windows.Forms.Clipboard]::GetText()}catch{}
  $clip=($clip -replace "[\r\n]+"," ").Trim()
- if($clip -and $clip -ne $last){
-   $seen.Add($clip); Write-Host ('  ['+$seen.Count+'] '+$clip)
-   $last=$clip
+
+ if($clip){
+   if($seen.Count -eq 0 -or $clip -ne $seen[$seen.Count-1]){
+     $seen.Add($clip)
+     Write-Host ('  ['+$seen.Count+'] '+$clip)
+     $duplicates=0
+   } else {
+     $duplicates++
+   }
+ } else {
+   $duplicates++
  }
- Key '{DOWN}' 120
- if($seen.Count -gt 1 -and $clip -eq $seen[0]){break}
+
+ if($duplicates -ge 3){break}
+ Key '{DOWN}' 160
 }
+
 Write-Host ''
-Write-Host ('Captured selections: '+$seen.Count)
-Write-Host 'SAFE STOP: discovery only. No Enter/double-click/CloudSave action was performed.'
-Write-Host 'If names are captured correctly, the next version will classify folders/PPTX/XLS/XLSX and walk them.'
+Write-Host ('Captured single selections: '+$seen.Count)
+Write-Host 'SAFE STOP: no Enter, double-click, or CloudSave action was performed.'
+Write-Host 'This version intentionally removed Ctrl+A because it selected every Explorer item at once.'

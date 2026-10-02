@@ -14,7 +14,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <UseWPF>false</UseWPF>
+    <!-- UseWPF brings in WindowsBase + UIAutomationClient/UIAutomationTypes so
+         System.Windows.Automation is available for the UI Automation adapters. -->
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>false</UseWindowsForms>
     <AssemblyName>cloudsave-agent</AssemblyName>
     <RootNamespace>CloudSave.Agent</RootNamespace>

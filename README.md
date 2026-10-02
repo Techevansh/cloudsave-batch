@@ -40,3 +40,14 @@ Expected result: File Explorer navigates to the configured target folder.
 - Record success/failure and move to the next document.
 
 The original cloudsave and cloudsave-excel repositories remain independent from this agent.
+
+
+## Full UI Agent v2.0
+
+The end-to-end agent is in `agent/cloudsave-full-agent.ps1` and is launched with `Run-CloudSave-Full-Agent.bat`.
+
+Flow: use the currently visible Explorer folder as the start point -> read rows through Windows UI Automation -> recurse into folders -> open only .pptx/.xlsx/.xls -> open PPTX analyzer or Excel analyzer -> click the task-pane structure-analysis button -> support cached authentication or wait for interactive sign-in/consent -> wait for the analysis cycle to finish -> close Office -> continue -> write a run log under `logs`.
+
+Safety: F12 is the emergency stop. The agent never stores account passwords. Non-Office files are skipped. The original `cloudsave` and `cloudsave-excel` repositories are not modified by this project.
+
+Current validation status: Explorer UI reading and single PPTX open/analyzer task-pane opening have been validated on the target environment. The complete v2.0 loop is implemented but should first be exercised on a small test folder before running across a large corporate folder tree.

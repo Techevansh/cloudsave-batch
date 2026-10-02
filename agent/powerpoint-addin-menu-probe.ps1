@@ -13,10 +13,24 @@ function Find-ById($root,$id){
  $c=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$id)
  return $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$c)
 }
-function Invoke-El($el){
+function Activate-El($el){
  $p=$null
- if($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$p)){([System.Windows.Automation.InvokePattern]$p).Invoke();return $true}
- return $false
+ if($el.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$p)){
+  ([System.Windows.Automation.InvokePattern]$p).Invoke(); return 'InvokePattern'
+ }
+ $p=$null
+ if($el.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern,[ref]$p)){
+  ([System.Windows.Automation.ExpandCollapsePattern]$p).Expand(); return 'ExpandCollapsePattern'
+ }
+ $p=$null
+ if($el.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern,[ref]$p)){
+  ([System.Windows.Automation.LegacyIAccessiblePattern]$p).DoDefaultAction(); return 'LegacyIAccessiblePattern'
+ }
+ $p=$null
+ if($el.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$p)){
+  ([System.Windows.Automation.SelectionItemPattern]$p).Select(); return 'SelectionItemPattern'
+ }
+ return $null
 }
 function Get-VisibleNamedElements {
  $root=[System.Windows.Automation.AutomationElement]::RootElement
@@ -36,7 +50,7 @@ function Get-VisibleNamedElements {
 }
 
 Write-Host ''
-Write-Host 'CloudSave PPTX Analyzer Menu Probe v0.8.1'
+Write-Host 'CloudSave PPTX Analyzer Menu Probe v0.8.2'
 Write-Host 'TARGET: the PPTX analyzer button shown in the Document Tools area.'
 Write-Host 'GUARDED ACTION: opens PowerPoint Add-ins menu only; PPTX analyzer itself is NOT clicked.'
 Write-Host ''
@@ -50,7 +64,13 @@ Write-Host ('PowerPoint: '+$target.Current.Name)
 $button=Find-ById $target 'OfficeExtensionsShowAddinFlyout'
 if(!$button){throw 'PowerPoint Add-ins button was not found by AutomationId.'}
 Write-Host ('Found Add-ins button: '+$button.Current.Name+' | id='+$button.Current.AutomationId)
-if(!(Invoke-El $button)){throw 'Add-ins button does not expose InvokePattern.'}
+$activation=Activate-El $button
+if(!$activation){
+ Write-Host 'RESULT: Add-ins button exposes none of the supported UI Automation action patterns.'
+ Write-Host 'SAFE STOP: no mouse/keyboard fallback was used.'
+ exit 2
+}
+Write-Host ('Opened Add-ins menu using: '+$activation)
 Start-Sleep -Milliseconds 1200
 
 $rows=@(Get-VisibleNamedElements)

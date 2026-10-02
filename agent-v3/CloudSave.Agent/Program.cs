@@ -1,3 +1,4 @@
+using System.IO;
 using CloudSave.Agent.Core;
 using CloudSave.Agent.Core.Infrastructure;
 using CloudSave.Agent.Windows;

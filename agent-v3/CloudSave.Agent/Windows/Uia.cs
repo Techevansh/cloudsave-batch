@@ -35,7 +35,7 @@ internal static class Uia
             try
             {
                 var hits = new List<UiaHit>();
-                var all = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+                var all = root.FindAll(TreeScope.Descendants, System.Windows.Automation.Condition.TrueCondition);
                 for (var i = 0; i < all.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();

@@ -1,12 +1,18 @@
 {
+  "_comment": "Phase-1 safe defaults (handoff section 17/18): verify ONE PPTX full cycle before enabling recursion. When Phase 1 succeeds, set maxOfficeFiles to 0 (unlimited) and enableRecursion to true, one step at a time.",
   "maxDepth": 10,
   "officeOpenTimeoutSec": 90,
-  "analyzerOpenTimeoutSec": 20,
+  "analyzerOpenTimeoutSec": 45,
   "analysisTimeoutSec": 600,
   "closeTimeoutSec": 20,
   "supportedExtensions": [".pptx", ".xlsx", ".xls"],
   "powerPointAnalyzerLabel": "PPTX analyzer",
   "excelAnalyzerLabel": "Excel analyzer",
+  "enableRecursion": false,
+  "maxOfficeFiles": 1,
+  "stateResume": true,
+  "enableProtectedViewEdit": true,
+  "dryRun": false,
   "emergencyStopKey": "F12",
   "startMode": "current-visible-explorer-folder"
 }

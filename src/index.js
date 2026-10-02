@@ -1,32 +1,36 @@
-import path from "node:path";
 import { scanOfficeFiles } from "./scanner.js";
 
 const targetPath = process.argv.slice(2).join(" ").trim();
 
 if (!targetPath) {
   console.error("Usage: npm run scan -- <folder-path>");
-  console.error('Example: npm run scan -- "D:\\CompanyFiles"');
+  console.error('Example: npm run scan -- "C:\\cloudsave-test"');
   process.exitCode = 1;
 } else {
   try {
     const result = await scanOfficeFiles(targetPath);
 
-    console.log("\nCloudSave Batch v0.1");
+    console.log("\nCloudSave Batch v0.2");
     console.log(`Scanning: ${result.root}\n`);
 
-    if (result.files.length === 0) {
-      console.log("No supported Office files found.");
-    } else {
-      for (const file of result.files) {
-        console.log(`[FILE] ${file.relativePath}  (${formatBytes(file.size)})`);
-      }
+    for (const folder of result.folders) {
+      console.log(`[DIR ] ${folder.relativePath}`);
+    }
+
+    for (const file of result.files) {
+      console.log(`[FILE] ${file.relativePath}  (${formatBytes(file.size)})`);
+    }
+
+    if (result.folders.length === 0 && result.files.length === 0) {
+      console.log("No folders or supported Office files found.");
     }
 
     console.log("\n----------------------------------------");
-    console.log(`${result.summary.total} Office file(s) detected.`);
-    console.log(`PPTX : ${result.summary.pptx}`);
-    console.log(`XLSX : ${result.summary.xlsx}`);
-    console.log(`XLS  : ${result.summary.xls}`);
+    console.log(`Folders      : ${result.summary.folders}`);
+    console.log(`Office files : ${result.summary.total}`);
+    console.log(`PPTX         : ${result.summary.pptx}`);
+    console.log(`XLSX         : ${result.summary.xlsx}`);
+    console.log(`XLS          : ${result.summary.xls}`);
     console.log("----------------------------------------");
     console.log("Scan complete.\n");
   } catch (error) {

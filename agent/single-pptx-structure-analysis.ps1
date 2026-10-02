@@ -15,7 +15,7 @@ public static class SafeUiClick {
 }
 '@
 
-function Find-VisibleByName([string]$pattern){
+function Find-VisibleExactName([string]$targetName){
  $root=[System.Windows.Automation.AutomationElement]::RootElement
  $all=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
  $hits=@()
@@ -24,10 +24,19 @@ function Find-VisibleByName([string]$pattern){
   try{
    $n=$e.Current.Name
    if([string]::IsNullOrWhiteSpace($n) -or $e.Current.IsOffscreen){continue}
-   if($n -match $pattern){
+   if($n -eq $targetName){
     $r=$e.Current.BoundingRectangle
     if($r.Width -gt 0 -and $r.Height -gt 0){
-      $hits += [pscustomobject]@{Element=$e;Name=$n;Type=$e.Current.ControlType.ProgrammaticName;Id=$e.Current.AutomationId;X=[int]$r.X;Y=[int]$r.Y;W=[int]$r.Width;H=[int]$r.Height}
+      $hits += [pscustomobject]@{
+        Element=$e
+        Name=$n
+        Type=$e.Current.ControlType.ProgrammaticName
+        Id=$e.Current.AutomationId
+        X=[int]$r.X
+        Y=[int]$r.Y
+        W=[int]$r.Width
+        H=[int]$r.Height
+      }
     }
    }
   }catch{}
@@ -39,42 +48,44 @@ function Activate($hit){
  $e=$hit.Element
  $p=$null
  if($e.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$p)){
-  ([System.Windows.Automation.InvokePattern]$p).Invoke(); return 'InvokePattern'
+  ([System.Windows.Automation.InvokePattern]$p).Invoke()
+  return 'InvokePattern'
  }
- $x=[int]($hit.X+$hit.W/2);$y=[int]($hit.Y+$hit.H/2)
+ $x=[int]($hit.X+$hit.W/2)
+ $y=[int]($hit.Y+$hit.H/2)
  [SafeUiClick]::Click($x,$y)
  return ('Exact UIA rectangle click @ '+$x+','+$y)
 }
 
+# Build the Korean button label from Unicode code points so Windows PowerShell 5.1
+# never has to parse Korean source text from a UTF-8-without-BOM Git checkout.
+$targetName = -join @(
+ [char]0xAD6C,[char]0xC870,[char]0x20,
+ [char]0xBD84,[char]0xC11D,[char]0x20,
+ [char]0xC2DC,[char]0xC791
+)
+
 Write-Host ''
-Write-Host 'CloudSave Single PPTX Structure Analysis v1.0'
-Write-Host 'GUARDED: exactly one visible "구조 분석 시작" button will be activated.'
+Write-Host 'CloudSave Single PPTX Structure Analysis v1.0.1'
+Write-Host 'GUARDED: exactly one visible task-pane analysis button may be activated.'
 Write-Host 'No Explorer traversal. No second Office file. No loop.'
 Write-Host ''
 
-$buttons=@(Find-VisibleByName '구조 분석 시작')
-Write-Host ('Visible Structure Analysis candidates: '+$buttons.Count)
+$buttons=@(Find-VisibleExactName $targetName)
+Write-Host ('Visible target candidates: '+$buttons.Count)
 $i=0
-foreach($b in $buttons){$i++;Write-Host ('['+$i+'] '+$b.Type+' | "'+$b.Name+'" | id="'+$b.Id+'" | rect='+$b.X+','+$b.Y+','+$b.W+','+$b.H)}
-if($buttons.Count -ne 1){
- throw ('Expected exactly one visible Structure Analysis button, found '+$buttons.Count+'. Nothing was clicked.')
+foreach($b in $buttons){
+ $i++
+ Write-Host ('['+$i+'] '+$b.Type+' | name="'+$b.Name+'" | id="'+$b.Id+'" | rect='+$b.X+','+$b.Y+','+$b.W+','+$b.H)
 }
+if($buttons.Count -ne 1){
+ throw ('Expected exactly one visible target button, found '+$buttons.Count+'. Nothing was clicked.')
+}
+
 $method=Activate $buttons[0]
 Write-Host ('Activated using: '+$method)
-Write-Host 'Waiting for analyzer status for up to 30 seconds...'
-
-$deadline=(Get-Date).AddSeconds(30)
-$last=''
-while((Get-Date)-lt $deadline){
- Start-Sleep -Seconds 1
- $status=@(Find-VisibleByName '분석|검사|파싱|완성|중단|오류|준비')
- $texts=@($status|ForEach-Object {$_.Name}|Select-Object -Unique)
- $joined=$texts -join ' | '
- if($joined -and $joined -ne $last){
-   Write-Host ('STATUS: '+$joined)
-   $last=$joined
- }
- if($joined -match '분석 리포트 완성|분석 준비됨|검사 중단'){break}
-}
+Write-Host 'Waiting 15 seconds so the task pane can update or open sign-in UI...'
+Start-Sleep -Seconds 15
 Write-Host ''
-Write-Host 'SAFE STOP: one Structure Analysis activation was attempted. No next file will be opened.'
+Write-Host 'SAFE STOP: one analysis activation was attempted. No next file will be opened.'
+Write-Host 'Check the PowerPoint task pane and any sign-in dialog, then send a screenshot.'

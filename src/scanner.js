@@ -11,27 +11,36 @@ export async function scanOfficeFiles(rootPath) {
     throw new Error(`Not a directory: ${root}`);
   }
 
+  const folders = [];
   const files = [];
-  await walkDirectory(root, root, files);
+  await walkDirectory(root, root, folders, files);
 
+  folders.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
   files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
   return {
     root,
     scannedAt: new Date().toISOString(),
+    folders,
     files,
-    summary: summarize(files),
+    summary: summarize(folders, files),
   };
 }
 
-async function walkDirectory(root, currentDirectory, files) {
+async function walkDirectory(root, currentDirectory, folders, files) {
   const entries = await readdir(currentDirectory, { withFileTypes: true });
 
   for (const entry of entries) {
     const absolutePath = path.join(currentDirectory, entry.name);
 
     if (entry.isDirectory()) {
-      await walkDirectory(root, absolutePath, files);
+      folders.push({
+        name: entry.name,
+        absolutePath,
+        relativePath: path.relative(root, absolutePath),
+      });
+
+      await walkDirectory(root, absolutePath, folders, files);
       continue;
     }
 
@@ -58,7 +67,7 @@ async function walkDirectory(root, currentDirectory, files) {
   }
 }
 
-function summarize(files) {
+function summarize(folders, files) {
   const byExtension = {
     ".pptx": 0,
     ".xlsx": 0,
@@ -70,6 +79,7 @@ function summarize(files) {
   }
 
   return {
+    folders: folders.length,
     total: files.length,
     pptx: byExtension[".pptx"],
     xlsx: byExtension[".xlsx"],

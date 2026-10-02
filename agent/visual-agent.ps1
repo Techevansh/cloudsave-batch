@@ -91,7 +91,7 @@ function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=75){
 }
 
 Write-Host ''
-Write-Host 'CloudSave Visual Navigator v0.12.2'
+Write-Host 'CloudSave Visual Navigator v0.13'
 Write-Host 'No Explorer preparation is required.'
 $vtw='C:\cloudsave-batch\agent\templates\vtw-server-u.png'
 if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}
@@ -99,13 +99,28 @@ if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}
 # Always create our own Explorer window so the user does not have to prepare one.
 $h=Open-ThisPC
 Write-Host ('2/5 Explorer ready. Title: '+[CloudSaveVision]::Title($h))
-Write-Host '3/5 Looking for VTW Server (U:) in the MAIN CONTENT area only...'
-Match-And-Open $h $vtw 'VTW Server (U:)'
+Write-Host '3/5 Selecting VTW Server (U:) by deterministic drive-grid position...'
+# Cloudium blocks filesystem access, but This PC renders the drive tiles normally.
+# Image matching proved ambiguous (Home/G: false positives), so use the Explorer content grid:
+# row 1 = C:, G:, S: ; row 2 col 1 = VTW Server (U:).
+$r=New-Object CloudSaveVision+RECT
+[CloudSaveVision]::GetWindowRect($h,[ref]$r)|Out-Null
+$w=$r.Right-$r.Left;$hh=$r.Bottom-$r.Top
+# Coordinates are relative to the Explorer window, so dual-monitor placement does not matter.
+# Ratios are based on the stable Windows 11 This PC tile layout visible in this environment.
+$x=$r.Left+[int]($w*0.445)
+$y=$r.Top+[int]($hh*0.315)
+Write-Host ('   Explorer-relative VTW target: '+$x+','+$y)
+[CloudSaveVision]::SetForegroundWindow($h)|Out-Null
+Start-Sleep -Milliseconds 250
+[CloudSaveVision]::SetCursorPos($x,$y)|Out-Null
+Start-Sleep -Milliseconds 350
+1..2|%{[CloudSaveVision]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[CloudSaveVision]::mouse_event(4,0,0,0,[UIntPtr]::Zero);Start-Sleep -Milliseconds 140}
 Write-Host '4/5 Waiting for the U: view to load...'
 Start-Sleep -Seconds 2
 $title=[CloudSaveVision]::Title($h)
 Write-Host ('   Explorer title now: '+$title)
-if($title -notmatch 'VTW|U:'){
+if($title -notmatch 'VTW.*U|VTW 서버'){
  Write-Host 'WARNING: U: could not be verified from the Explorer title.'
  Write-Host 'No further automatic clicks will be made.'
  exit 6

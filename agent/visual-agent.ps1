@@ -29,19 +29,21 @@ public static class CloudSaveVision {
  }
  public static string Title(IntPtr h){var s=new StringBuilder(512);GetWindowText(h,s,s.Capacity);return s.ToString();}
  public static int[] Match(Bitmap screen,Bitmap tpl) {
-  var sr=new Rectangle(0,0,screen.Width,screen.Height);var tr=new Rectangle(0,0,tpl.Width,tpl.Height);
+  int sw=screen.Width,sh=screen.Height,tw=tpl.Width,th=tpl.Height;
+  if(tw>sw||th>sh) return new int[]{0,0,999};
+  var sr=new Rectangle(0,0,sw,sh);var tr=new Rectangle(0,0,tw,th);
   var sd=screen.LockBits(sr,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
   var td=tpl.LockBits(tr,ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
   int ss=Math.Abs(sd.Stride),ts=Math.Abs(td.Stride);byte[] s=new byte[ss*sd.Height],t=new byte[ts*td.Height];
   Marshal.Copy(sd.Scan0,s,0,s.Length);Marshal.Copy(td.Scan0,t,0,t.Length);screen.UnlockBits(sd);tpl.UnlockBits(td);
   double best=Double.MaxValue;int bx=0,by=0;
-  for(int y=0;y<=screen.Height-tpl.Height;y+=3)for(int x=0;x<=screen.Width-tpl.Width;x+=3){
+  for(int y=0;y<=sh-th;y+=2)for(int x=0;x<=sw-tw;x+=2){
    long sum=0;int count=0;
-   for(int ty=3;ty<tpl.Height;ty+=10)for(int tx=3;tx<tpl.Width;tx+=10){
+   for(int ty=2;ty<th;ty+=7)for(int tx=2;tx<tw;tx+=7){
     int si=(y+ty)*ss+(x+tx)*4,ti=ty*ts+tx*4;
     sum+=Math.Abs(s[si]-t[ti])+Math.Abs(s[si+1]-t[ti+1])+Math.Abs(s[si+2]-t[ti+2]);count++;
    }
-   double score=(double)sum/count;if(score<best){best=score;bx=x;by=y;}
+   double score=(double)sum/Math.Max(1,count);if(score<best){best=score;bx=x;by=y;}
   } return new int[]{bx,by,(int)Math.Round(best)};
  }
 }
@@ -63,71 +65,69 @@ function Open-ThisPC {
  if($null -eq $h){throw 'Explorer did not appear.'}
  [CloudSaveVision]::ShowWindow($h,9)|Out-Null
  [CloudSaveVision]::SetForegroundWindow($h)|Out-Null
- Start-Sleep -Milliseconds 1200
+ Start-Sleep -Milliseconds 1400
  return $h
 }
-function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=75){
+function Capture-ExplorerContent($h) {
  $r=New-Object CloudSaveVision+RECT
  [CloudSaveVision]::GetWindowRect($h,[ref]$r)|Out-Null
  $w=$r.Right-$r.Left;$hh=$r.Bottom-$r.Top
- if($w -lt 500 -or $hh -lt 350){throw 'Explorer window is too small.'}
- # Exclude Explorer's left navigation pane. The same VTW label exists there and caused false matches.
- $searchLeft=[Math]::Min(540,[Math]::Max(360,[int]($w*0.32)))
- $searchTop=110
- $searchW=$w-$searchLeft
- $searchH=$hh-$searchTop
- if($searchW -lt 300 -or $searchH -lt 250){throw 'Explorer content area is too small.'}
- $shot=New-Object Drawing.Bitmap $searchW,$searchH
- $g=[Drawing.Graphics]::FromImage($shot);$g.CopyFromScreen($r.Left+$searchLeft,$r.Top+$searchTop,0,0,$shot.Size);$g.Dispose()
+ if($w -lt 700 -or $hh -lt 450){throw 'Explorer window is too small.'}
+ # Critical: search ONLY the right main pane. Never include Home/left navigation.
+ $left=[Math]::Max(430,[int]($w*0.31))
+ $top=[Math]::Max(105,[int]($hh*0.11))
+ $cw=$w-$left-20;$ch=$hh-$top-20
+ $bmp=New-Object Drawing.Bitmap $cw,$ch
+ $g=[Drawing.Graphics]::FromImage($bmp)
+ $g.CopyFromScreen($r.Left+$left,$r.Top+$top,0,0,$bmp.Size)
+ $g.Dispose()
+ return @{ Bitmap=$bmp; Rect=$r; Left=$left; Top=$top }
+}
+function Find-VtwTile($h,[string]$Template) {
+ $cap=Capture-ExplorerContent $h
  $tpl=[Drawing.Bitmap]::FromFile($Template)
- $m=[CloudSaveVision]::Match($shot,$tpl);$tw=$tpl.Width;$th=$tpl.Height;$tpl.Dispose();$shot.Dispose()
- Write-Host ('   '+$Label+' score: '+$m[2]+' / threshold: '+$Threshold)
- if($m[2] -gt $Threshold){throw ($Label+' visual score was too weak ('+$m[2]+'). Nothing was clicked.')}
- $x=$r.Left+$searchLeft+$m[0]+[int]($tw/2);$y=$r.Top+$searchTop+$m[1]+[int]($th/2)
- Write-Host ('   MATCH '+$Label+': '+$x+','+$y)
- [CloudSaveVision]::SetForegroundWindow($h)|Out-Null;Start-Sleep -Milliseconds 200
- [CloudSaveVision]::SetCursorPos($x,$y)|Out-Null;Start-Sleep -Milliseconds 300
- 1..2|%{[CloudSaveVision]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[CloudSaveVision]::mouse_event(4,0,0,0,[UIntPtr]::Zero);Start-Sleep -Milliseconds 140}
+ try {
+   $m=[CloudSaveVision]::Match($cap.Bitmap,$tpl)
+   $x=$cap.Rect.Left+$cap.Left+$m[0]+[int]($tpl.Width/2)
+   $y=$cap.Rect.Top+$cap.Top+$m[1]+[int]($tpl.Height/2)
+   return @{Score=$m[2];X=$x;Y=$y;Width=$tpl.Width;Height=$tpl.Height}
+ } finally {$tpl.Dispose();$cap.Bitmap.Dispose()}
+}
+function DoubleClick([int]$x,[int]$y) {
+ [CloudSaveVision]::SetCursorPos($x,$y)|Out-Null
+ Start-Sleep -Milliseconds 450
+ 1..2|%{[CloudSaveVision]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[CloudSaveVision]::mouse_event(4,0,0,0,[UIntPtr]::Zero);Start-Sleep -Milliseconds 150}
 }
 
 Write-Host ''
-Write-Host 'CloudSave Visual Navigator v0.14'
-Write-Host 'No Explorer preparation is required.'
+Write-Host 'CloudSave Visual Navigator v0.15'
+Write-Host 'Mode: main-pane template detection (no guessed drive coordinates)'
 $vtw='C:\cloudsave-batch\agent\templates\vtw-server-u.png'
 if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}
 
-# Always create our own Explorer window so the user does not have to prepare one.
 $h=Open-ThisPC
 Write-Host ('2/5 Explorer ready. Title: '+[CloudSaveVision]::Title($h))
-Write-Host '3/5 Selecting VTW Server (U:) by deterministic drive-grid position...'
-# Cloudium blocks filesystem access, but This PC renders the drive tiles normally.
-# Image matching proved ambiguous (Home/G: false positives), so use the Explorer content grid:
-# row 1 = C:, G:, S: ; row 2 col 1 = VTW Server (U:).
-$r=New-Object CloudSaveVision+RECT
-[CloudSaveVision]::GetWindowRect($h,[ref]$r)|Out-Null
-$w=$r.Right-$r.Left;$hh=$r.Bottom-$r.Top
-# Coordinates are relative to the Explorer window, so dual-monitor placement does not matter.
-# Ratios are based on the stable Windows 11 This PC tile layout visible in this environment.
-# In the observed Windows 11 This PC view, the main content begins around x=40% of
-# the Explorer window. VTW Server (U:) is row 2 / column 1 of the drive grid.
-# Previous v0.13 used 44.5% / 31.5%, which landed on the left navigation Home item.
-$x=$r.Left+[int]($w*0.675)
-$y=$r.Top+[int]($hh*0.345)
-Write-Host ('   Explorer bounds: '+$r.Left+','+$r.Top+' -> '+$r.Right+','+$r.Bottom)
-Write-Host ('   Explorer-relative VTW target: '+$x+','+$y)
+Write-Host '3/5 Detecting the saved VTW Server (U:) tile inside MAIN PANE only...'
+$hit=Find-VtwTile $h $vtw
+Write-Host ('   VTW template score: '+$hit.Score)
+Write-Host ('   Detected center: '+$hit.X+','+$hit.Y)
+# Existing template was captured from this exact machine. Keep a conservative cutoff.
+if($hit.Score -gt 70){
+ Write-Host 'STOP: VTW tile was not matched confidently. Nothing was clicked.'
+ exit 5
+}
+Write-Host '4/5 MATCH accepted. Moving pointer to detected VTW tile...'
 [CloudSaveVision]::SetForegroundWindow($h)|Out-Null
 Start-Sleep -Milliseconds 250
-[CloudSaveVision]::SetCursorPos($x,$y)|Out-Null
-Start-Sleep -Milliseconds 350
-1..2|%{[CloudSaveVision]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[CloudSaveVision]::mouse_event(4,0,0,0,[UIntPtr]::Zero);Start-Sleep -Milliseconds 140}
-Write-Host '4/5 Waiting for the U: view to load...'
+DoubleClick $hit.X $hit.Y
+Write-Host '   Double-click sent to detected template center.'
+Write-Host '5/5 Verifying Explorer title...'
 Start-Sleep -Seconds 2
 $title=[CloudSaveVision]::Title($h)
 Write-Host ('   Explorer title now: '+$title)
-if($title -notmatch 'VTW.*U|VTW 서버'){
- Write-Host 'WARNING: U: could not be verified from the Explorer title.'
- Write-Host 'No further automatic clicks will be made.'
- exit 6
+if($title -match 'VTW.*U|VTW 서버'){
+ Write-Host 'VERIFIED: VTW Server (U:) opened.'
+ exit 0
 }
-Write-Host '5/5 VERIFIED: Explorer changed after opening VTW Server (U:).'
-Write-Host 'SAFE STOP: next folder navigation is not enabled until its template is captured.'
+Write-Host 'STOP: Explorer did not confirm VTW Server (U:). No more clicks will be made.'
+exit 6

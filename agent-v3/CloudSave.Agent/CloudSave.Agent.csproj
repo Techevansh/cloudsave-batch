@@ -1,11 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows executable: the entry point plus the UI Automation adapters
+    (net8.0-windows). The decision logic lives in CloudSave.Agent.Core so that
+    almost everything is testable off-Windows. The win-x64 self-contained output
+    is produced by the CI publish step (runtime win-x64, self-contained),
+    so no RID/Platform is pinned here (keeps the solution build clean).
+  -->
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
     <UseWPF>false</UseWPF>
     <UseWindowsForms>false</UseWindowsForms>
-    <Platforms>x64</Platforms>
+    <AssemblyName>cloudsave-agent</AssemblyName>
+    <RootNamespace>CloudSave.Agent</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CloudSave.Agent.Core\CloudSave.Agent.Core.csproj" />
+  </ItemGroup>
+
 </Project>

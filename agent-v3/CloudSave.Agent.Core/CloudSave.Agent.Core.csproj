@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Platform-agnostic core (net8.0, NOT net8.0-windows).
+    Holds the orchestrator state machine, models, error taxonomy, retry policy,
+    classification, event protocol, and state stores. Because it has no Windows
+    dependency, it builds and its unit tests run on any OS / CI runner. The only
+    Windows-specific code (UI Automation adapters + the exe entry point) lives in
+    the CloudSave.Agent project.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

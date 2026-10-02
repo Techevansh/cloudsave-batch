@@ -1,5 +1,9 @@
 namespace CloudSave.Agent.Core;
 
+/// <summary>
+/// A structured event streamed to the GUI as one JSON object per line (JSONL) over stdout.
+/// External consumers (Electron) parse these; keep the shape stable.
+/// </summary>
 public sealed record AgentEvent(
     DateTimeOffset Timestamp,
     string Level,

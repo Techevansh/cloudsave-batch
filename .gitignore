@@ -4,3 +4,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 cloudsave.db
+
+# .NET build output (agent-v3)
+[Bb]in/
+[Oo]bj/
+artifacts/
+*.user

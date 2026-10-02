@@ -12,6 +12,7 @@ public enum DocumentKind
     Other
 }
 
+/// <summary>High-level stage of the per-run / per-file state machine (for events/telemetry).</summary>
 public enum AgentStage
 {
     DiscoverStartExplorer,
@@ -30,6 +31,7 @@ public enum AgentStage
     Cancelled
 }
 
+/// <summary>Analysis task-pane sub-state (owned by the AnalyzerAdapter, surfaced in results).</summary>
 public enum AnalysisState
 {
     Idle,
@@ -44,7 +46,17 @@ public enum AnalysisState
 public sealed class AgentRunRequest
 {
     public StartMode StartMode { get; init; } = StartMode.CurrentVisibleExplorerFolder;
+
     public int MaxDepth { get; init; } = 10;
+
+    /// <summary>When false, only the start folder is processed (no subfolder recursion). Phase-1/2/3 testing.</summary>
+    public bool EnableRecursion { get; init; } = true;
+
+    /// <summary>Cap on Office files processed this run. 0 = unlimited. Set to 1 for a single-file milestone test.</summary>
+    public int MaxOfficeFiles { get; init; } = 0;
+
+    /// <summary>When true, files already recorded as completed in the state store are skipped (resume).</summary>
+    public bool EnableResume { get; init; } = true;
 }
 
 public sealed class AgentRunResult
@@ -63,6 +75,11 @@ public sealed class AgentRunResult
         new() { Success = false, ErrorCode = code, Message = message, Processed = processed, Failed = failed, Skipped = skipped };
 }
 
+/// <summary>
+/// A single row read from a File Explorer window through UI Automation.
+/// LogicalPath is a UIA-derived identity (folderChain + name), never a real U: filesystem path,
+/// because U: cannot be enumerated through filesystem APIs.
+/// </summary>
 public sealed record ExplorerItem(
     string Name,
     string LogicalPath,
@@ -81,7 +98,11 @@ public sealed record AnalysisResult(
     bool AuthenticationWasInteractive,
     string? ErrorCode = null,
     string? Message = null
-);
+)
+{
+    public static AnalysisResult Completed(bool interactiveAuth) => new(true, interactiveAuth);
+    public static AnalysisResult Failure(string code, string message) => new(false, false, code, message);
+}
 
 public sealed record ProcessingRecord(
     string LogicalPath,
@@ -90,3 +111,11 @@ public sealed record ProcessingRecord(
     DateTimeOffset UpdatedAt,
     string? LastError = null
 );
+
+/// <summary>Canonical status strings stored in the state store.</summary>
+public static class ProcessingStatus
+{
+    public const string Opening = "opening";
+    public const string Completed = "completed";
+    public const string Failed = "failed";
+}

@@ -290,3 +290,47 @@ The following are already proven in the target machine:
 - Office save/discard prompt can be detected and dismissed.
 
 v3 should preserve these working techniques while replacing the fragile integration layer.
+
+---
+
+## Stage A — implementation decisions (done)
+
+Stage A is implemented under `agent-v3/` and validated locally (build + 46 unit tests green) and in CI.
+
+Two refinements were made to the plan above, both to strengthen "validate before the user runs":
+
+1. **Core / Windows split.** The solution is now three projects:
+   - `CloudSave.Agent.Core` (`net8.0`, platform-agnostic): orchestrator state machine,
+     models, error taxonomy (`ErrorCodes`), `RetryPolicy`, `DocumentClassifier`, JSONL
+     event protocol, and state stores. Builds and unit-tests on any OS / CI runner.
+   - `CloudSave.Agent` (`net8.0-windows`): the exe entry point plus the UI Automation
+     adapters (Stage B/C). This is the only Windows-only code.
+   - `CloudSave.Agent.Tests` (`net8.0`): references Core only; the whole decision-logic
+     matrix runs without a Windows desktop.
+   This shrinks the untestable surface to the thin UIA glue and makes the state-machine
+   test suite authoritative before any milestone build.
+
+2. **Resume store = JSON, not SQLite.** `JsonStateStore` (atomic temp-file replace,
+   tolerant load) keeps the self-contained publish free of native dependencies.
+
+Phased-testing knobs are driven by environment variables so the launcher/GUI can set
+them without rebuilding: `CLOUDSAVE_RECURSION`, `CLOUDSAVE_MAX_FILES` (set `1` for a
+single-file milestone), `CLOUDSAVE_RESUME`, `CLOUDSAVE_MAX_DEPTH`, `CLOUDSAVE_STATE_FILE`.
+
+**Stage C is the risk gate.** The one still-unsolved bug — the task-pane `구조 분석 시작`
+button not appearing in the UIA tree — is a WebView2/Chromium accessibility issue, **not**
+a PowerShell issue, so moving to C# does not fix it by itself. The proven v2 technique
+(scan from the **desktop root**, filter to the Office window bounds, wake the WebView a11y
+tree, retry transient UIA errors) must be the primary path, not a fallback. This is
+documented as the adapter contract in `agent-v3/CloudSave.Agent/Windows/README_ADAPTERS.md`
+and will be the first thing proven in Stage C.
+
+### Test matrix status (Stage A)
+
+46 tests passing, covering: resume skip / resume-off reprocess, Office-only selection,
+per-file failure isolation, Office always closed (success / analysis throw / office-open
+failure / cancellation), recursion on/off, nested traverse + GoBack, GoBack after subtree
+failure, folder-enter failure isolation, folder-disappeared handling, max-depth, file cap,
+interactive-auth surfacing, transient-retry-then-succeed, transient-exhaustion, pre-cancel
+and mid-analysis cancel, failure recorded to state; plus `RetryPolicy`, `DocumentClassifier`,
+and `JsonStateStore` unit tests.

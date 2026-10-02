@@ -91,7 +91,7 @@ function Match-And-Open($h,[string]$Template,[string]$Label,[int]$Threshold=75){
 }
 
 Write-Host ''
-Write-Host 'CloudSave Visual Navigator v0.13'
+Write-Host 'CloudSave Visual Navigator v0.14'
 Write-Host 'No Explorer preparation is required.'
 $vtw='C:\cloudsave-batch\agent\templates\vtw-server-u.png'
 if(-not(Test-Path $vtw)){throw 'VTW template is missing.'}
@@ -108,8 +108,12 @@ $r=New-Object CloudSaveVision+RECT
 $w=$r.Right-$r.Left;$hh=$r.Bottom-$r.Top
 # Coordinates are relative to the Explorer window, so dual-monitor placement does not matter.
 # Ratios are based on the stable Windows 11 This PC tile layout visible in this environment.
-$x=$r.Left+[int]($w*0.445)
-$y=$r.Top+[int]($hh*0.315)
+# In the observed Windows 11 This PC view, the main content begins around x=40% of
+# the Explorer window. VTW Server (U:) is row 2 / column 1 of the drive grid.
+# Previous v0.13 used 44.5% / 31.5%, which landed on the left navigation Home item.
+$x=$r.Left+[int]($w*0.675)
+$y=$r.Top+[int]($hh*0.345)
+Write-Host ('   Explorer bounds: '+$r.Left+','+$r.Top+' -> '+$r.Right+','+$r.Bottom)
 Write-Host ('   Explorer-relative VTW target: '+$x+','+$y)
 [CloudSaveVision]::SetForegroundWindow($h)|Out-Null
 Start-Sleep -Milliseconds 250

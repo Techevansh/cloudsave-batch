@@ -1,5 +1,7 @@
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;
@@ -10,7 +12,6 @@ public static class WalkerNative {
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
  [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h,StringBuilder s,int n);
  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h,StringBuilder s,int n);
- [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  public static IntPtr Explorer(){
   IntPtr found=IntPtr.Zero;
   EnumWindows(delegate(IntPtr h,IntPtr l){
@@ -23,69 +24,83 @@ public static class WalkerNative {
 }
 '@
 
+function Get-Pattern([System.Windows.Automation.AutomationElement]$Element,[System.Windows.Automation.AutomationPattern]$Pattern){
+ $obj=$null
+ if($Element.TryGetCurrentPattern($Pattern,[ref]$obj)){return $obj}
+ return $null
+}
+
 Write-Host ''
-Write-Host 'CloudSave Explorer Reader v0.3'
-Write-Host 'READ-ONLY UI Automation probe'
-Write-Host 'No Ctrl+A / arrows / F6 / Enter / mouse clicks.'
+Write-Host 'CloudSave Explorer Reader v0.4'
+Write-Host 'READ-ONLY classification + UIA capability probe'
+Write-Host 'No keyboard injection. No mouse clicks. Nothing will be opened.'
 Write-Host ''
 
 $h=[WalkerNative]::Explorer()
-if($h -eq [IntPtr]::Zero){ throw 'No File Explorer window is open. Open the target folder first.' }
-[WalkerNative]::SetForegroundWindow($h)|Out-Null
-Start-Sleep -Milliseconds 300
+if($h -eq [IntPtr]::Zero){throw 'No File Explorer window is open. Open the target folder first.'}
 $title=[WalkerNative]::Title($h)
 Write-Host ('Explorer detected: '+$title)
 
-# Use Windows UI Automation to inspect the Explorer window without filesystem access
-# and without injecting keyboard/mouse input.
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($h)
-$all=$root.FindAll(
- [System.Windows.Automation.TreeScope]::Descendants,
- [System.Windows.Automation.Condition]::TrueCondition
-)
+$all=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
 
-$items=New-Object System.Collections.Generic.List[object]
+$rows=New-Object System.Collections.Generic.List[object]
+$seen=@{}
 for($i=0;$i -lt $all.Count;$i++){
  $e=$all.Item($i)
- try {
+ try{
   $name=$e.Current.Name
   $type=$e.Current.ControlType.ProgrammaticName
-  $class=$e.Current.ClassName
   if([string]::IsNullOrWhiteSpace($name)){continue}
-  # Explorer detail/list rows are normally DataItem/ListItem. Keep both,
-  # but ignore obvious navigation/tree controls.
-  if($type -in @('ControlType.DataItem','ControlType.ListItem')){
-   $items.Add([pscustomobject]@{Name=$name;Type=$type;Class=$class})
-  }
- } catch {}
-}
-
-# De-duplicate names while preserving order.
-$seen=@{}
-$unique=New-Object System.Collections.Generic.List[object]
-foreach($item in $items){
- $key=$item.Type+'|'+$item.Name
- if(-not $seen.ContainsKey($key)){
+  if($type -notin @('ControlType.DataItem','ControlType.ListItem')){continue}
+  $key=$type+'|'+$name
+  if($seen.ContainsKey($key)){continue}
   $seen[$key]=$true
-  $unique.Add($item)
- }
+
+  $ext=[System.IO.Path]::GetExtension($name).ToLowerInvariant()
+  $kind='OTHER'
+  if($ext -in @('.pptx','.xlsx','.xls')){$kind='OFFICE'}
+  elseif([string]::IsNullOrWhiteSpace($ext)){$kind='FOLDER-CANDIDATE'}
+
+  $invoke=Get-Pattern $e ([System.Windows.Automation.InvokePattern]::Pattern)
+  $selection=Get-Pattern $e ([System.Windows.Automation.SelectionItemPattern]::Pattern)
+  $legacy=Get-Pattern $e ([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+
+  $rows.Add([pscustomobject]@{
+    Index=$rows.Count+1; Name=$name; Kind=$kind;
+    Invoke=($null -ne $invoke); Select=($null -ne $selection); Legacy=($null -ne $legacy)
+  })
+ }catch{}
 }
 
-Write-Host ('UI items found: '+$unique.Count)
-$n=0
-foreach($item in $unique){
- $n++
- Write-Host ('  ['+$n+'] ['+$item.Type.Replace('ControlType.','')+'] '+$item.Name)
- if($n -ge 120){break}
+$office=@($rows|Where-Object Kind -eq 'OFFICE')
+$folders=@($rows|Where-Object Kind -eq 'FOLDER-CANDIDATE')
+$other=@($rows|Where-Object Kind -eq 'OTHER')
+
+Write-Host ('Items: '+$rows.Count+' | Office: '+$office.Count+' | Folder candidates: '+$folders.Count+' | Other: '+$other.Count)
+Write-Host ''
+foreach($r in $rows){
+ $caps=@()
+ if($r.Invoke){$caps+='Invoke'}
+ if($r.Select){$caps+='Select'}
+ if($r.Legacy){$caps+='Legacy'}
+ $capText=if($caps.Count){$caps -join ','}else{'read-only'}
+ Write-Host ('  ['+$r.Index+'] ['+$r.Kind+'] ['+$capText+'] '+$r.Name)
+}
+
+Write-Host ''
+if($office.Count){
+ Write-Host 'Office files detected:'
+ foreach($r in $office){Write-Host ('  - '+$r.Name)}
 }
 Write-Host ''
-if($unique.Count -gt 0){
- Write-Host 'RESULT: Explorer items are readable through Windows UI Automation.'
- Write-Host 'NEXT: classify folders/Office files and navigate through UI Automation, not SendKeys.'
-} else {
- Write-Host 'RESULT: no list items were exposed by UI Automation.'
- Write-Host 'NEXT: inspect Explorer accessibility tree; no automatic clicks were made.'
+$actionable=@($rows|Where-Object {$_.Invoke -or $_.Select -or $_.Legacy})
+Write-Host ('UIA actionable items: '+$actionable.Count+' / '+$rows.Count)
+if($actionable.Count -gt 0){
+ Write-Host 'RESULT: classification works and Explorer exposes automation patterns.'
+ Write-Host 'NEXT: add a guarded single-item open test using UI Automation only.'
+}else{
+ Write-Host 'RESULT: classification works, but rows expose no direct UIA action pattern.'
+ Write-Host 'NEXT: inspect parent/child automation elements before attempting navigation.'
 }
-Write-Host 'SAFE STOP: read-only test completed.'
+Write-Host 'SAFE STOP: read-only test completed; nothing was opened.'

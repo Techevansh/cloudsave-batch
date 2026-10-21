@@ -4,16 +4,20 @@ using CloudSave.Agent.Core;
 namespace CloudSave.Agent.Windows;
 
 /// <summary>
-/// Finds the Office window for an opened file and closes it without modifying the source.
-/// PowerPoint = PPTFrameClass, Excel = XLMAIN (ports single-office-open + the close logic).
+/// Finds the Office window that THIS open produced and closes it without modifying the source.
+/// PowerPoint = PPTFrameClass, Excel = XLMAIN.
+///
+/// Safety rule: windows that already existed before the agent opened the file are never driven
+/// or closed (a user's own document, possibly with unsaved edits, is never touched). The one
+/// exception is a blank workbook/presentation Office replaced with this file (its title changed
+/// to this file's name), which holds no user data.
 /// </summary>
 internal sealed class WindowsOfficeAdapter : IOfficeAdapter
 {
-    private const string PowerPointClass = "PPTFrameClass";
-    private const string ExcelClass = "XLMAIN";
-
     private readonly IEventWriter _events;
     private readonly WindowsOptions _options;
+    private Dictionary<IntPtr, string> _baseline = new();
+    private HashSet<IntPtr> _baselineDialogs = new();
 
     public WindowsOfficeAdapter(IEventWriter events, WindowsOptions options)
     {
@@ -21,30 +25,67 @@ internal sealed class WindowsOfficeAdapter : IOfficeAdapter
         _options = options;
     }
 
-    public Task<OfficeSession> WaitForDocumentAsync(ExplorerItem file, CancellationToken cancellationToken)
+    public Task PrepareForOpenAsync(ExplorerItem file, CancellationToken cancellationToken)
     {
-        var expectedClass = file.Kind == DocumentKind.Excel ? ExcelClass : PowerPointClass;
+        _baseline = NativeMethods.GetVisibleWindows()
+            .Where(w => OfficeDialogs.IsOfficeFrame(w.ClassName))
+            .ToDictionary(w => w.Handle, w => w.Title);
+        _baselineDialogs = OfficeDialogs.CurrentDialogs();
+        return Task.CompletedTask;
+    }
+
+    public async Task<OfficeSession> WaitForDocumentAsync(ExplorerItem file, CancellationToken cancellationToken)
+    {
+        var expectedClass = file.Kind == DocumentKind.Excel ? OfficeDialogs.ExcelClass : OfficeDialogs.PowerPointClass;
         var baseName = StripExtension(file.Name);
         var deadline = DateTime.UtcNow + _options.OfficeOpenTimeout;
 
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            (IntPtr Handle, string Title, int Score) best = (IntPtr.Zero, "", 0);
             foreach (var w in NativeMethods.GetVisibleWindows())
             {
                 if (!string.Equals(w.ClassName, expectedClass, StringComparison.Ordinal)) continue;
-                if (w.Title.Contains(baseName, StringComparison.Ordinal))
-                    return Task.FromResult(new OfficeSession(w.Handle, w.Title, file.Kind));
+                var score = TitleScore(w.Title, file.Name, baseName);
+                if (score == 0) continue;
+                if (_baseline.TryGetValue(w.Handle, out var before) && !IsReplacedBlank(before, w.Title, score, file.Name, baseName))
+                    continue;
+                if (score > best.Score) best = (w.Handle, w.Title, score);
             }
+
+            if (best.Score > 0)
+                return new OfficeSession(best.Handle, best.Title, file.Kind);
+
+            // "File in use" / "update links?" can appear before (or instead of) the document window.
+            var dismissed = OfficeDialogs.TryDismissOpenPrompts(0, _baselineDialogs);
+            if (dismissed is not null)
+                await _events.WriteAsync(AgentEvent.Info("office.prompt", $"Answered open prompt {dismissed}"), cancellationToken)
+                    .ConfigureAwait(false);
+
             Thread.Sleep(300);
         }
 
+        var alreadyOpen = _baseline.Values.Any(t => TitleScore(t, file.Name, baseName) == 2);
+        if (alreadyOpen)
+            throw new AgentOperationException(ErrorCodes.OfficeOpenTimeout,
+                $"'{file.Name}'이(가) 에이전트 실행 전부터 열려 있었습니다. 사용자 문서는 건드리지 않으므로, 그 창을 닫고 다시 실행하세요.");
+
+        // Which windows did appear (e.g. a Protected View window of another class) - makes one run diagnostic.
+        var appeared = NativeMethods.GetVisibleWindows()
+            .Where(w => !_baseline.ContainsKey(w.Handle) && w.Title.Contains(baseName, StringComparison.Ordinal))
+            .Select(w => $"{w.ClassName}:\"{w.Title}\"")
+            .Take(5)
+            .ToList();
         throw new AgentOperationException(ErrorCodes.OfficeOpenTimeout,
-            $"Office window did not appear for {file.Name} within {_options.OfficeOpenTimeout.TotalSeconds:0}s.");
+            $"Office window ({expectedClass}) did not appear for {file.Name} within {_options.OfficeOpenTimeout.TotalSeconds:0}s." +
+            (appeared.Count > 0 ? $" New windows with that name: {string.Join(", ", appeared)}" : ""));
     }
 
     public Task CloseWithoutSavingAsync(OfficeSession session, CancellationToken cancellationToken)
     {
+        var pid = NativeMethods.ProcessIdOf(session.WindowHandle);
         try
         {
             var root = Uia.FromHandle(session.WindowHandle);
@@ -54,47 +95,42 @@ internal sealed class WindowsOfficeAdapter : IOfficeAdapter
         catch (Exception ex)
         {
             // Closing is best-effort; report but never force-kill.
-            _events.WriteAsync(AgentEvent.Warn("office.close", ErrorCodes.OfficeCloseTimeout, $"Close failed: {ex.Message}"),
-                CancellationToken.None).GetAwaiter().GetResult();
-            return Task.CompletedTask;
+            throw new AgentOperationException(ErrorCodes.OfficeCloseTimeout, $"Close request failed: {ex.Message}", ex);
         }
 
         var deadline = DateTime.UtcNow + _options.CloseTimeout;
         while (DateTime.UtcNow < deadline)
         {
-            // A save/discard prompt can block closing; we never modified the file, so choose discard.
-            TryDismissSavePrompt();
-            if (!WindowExists(session.WindowHandle)) return Task.CompletedTask;
+            if (IsGone(session.WindowHandle)) return Task.CompletedTask;
+            // A save/discard prompt can block closing; the agent never edited the file, so discard.
+            OfficeDialogs.TryDismissSavePrompt(session.WindowHandle, pid);
+            if (IsGone(session.WindowHandle)) return Task.CompletedTask;
             Thread.Sleep(300);
         }
-        return Task.CompletedTask;
+
+        throw new AgentOperationException(ErrorCodes.OfficeCloseTimeout,
+            $"\"{session.Title}\" is still open {_options.CloseTimeout.TotalSeconds:0}s after the close request (a prompt may be waiting).");
     }
 
-    private void TryDismissSavePrompt()
+    /// <summary>2 = the title starts with this file (strong), 1 = contains its base name, 0 = no match.</summary>
+    private static int TitleScore(string title, string fileName, string baseName)
     {
-        try
-        {
-            // Match the "Don't Save" button robustly across Office builds, while never
-            // matching the plain "저장"/"Save" or "다른 이름으로 저장"/"Save As" buttons:
-            //   "저장 안 함", "저장 안함"  -> both contain "저장 안"
-            //   "Don't Save"               -> case-insensitive contains
-            var hit = Uia.Collect(Uia.Root, h =>
-                    h.ControlType == "ControlType.Button" && !h.IsOffscreen &&
-                    (h.Name.Contains("저장 안", StringComparison.Ordinal)
-                     || h.Name.Contains("Don't Save", StringComparison.OrdinalIgnoreCase)
-                     || h.Name.Contains("Don’t Save", StringComparison.OrdinalIgnoreCase)),
-                CancellationToken.None, attempts: 1).FirstOrDefault();
-            if (hit is not null)
-            {
-                Uia.Activate(hit);
-                Thread.Sleep(400);
-            }
-        }
-        catch { /* best effort */ }
+        if (string.IsNullOrEmpty(title)) return 0;
+        if (title.StartsWith(fileName, StringComparison.OrdinalIgnoreCase)
+            || title.StartsWith(baseName + " - ", StringComparison.OrdinalIgnoreCase)
+            || title.StartsWith(baseName + " [", StringComparison.OrdinalIgnoreCase)
+            || title.StartsWith(baseName + "  [", StringComparison.OrdinalIgnoreCase))
+            return 2;
+        return title.Contains(baseName, StringComparison.Ordinal) ? 1 : 0;
     }
 
-    private static bool WindowExists(IntPtr handle) =>
-        NativeMethods.GetVisibleWindows().Any(w => w.Handle == handle);
+    /// <summary>A pre-existing window is ours only if Office replaced a blank document in it with this file.</summary>
+    private static bool IsReplacedBlank(string titleBefore, string titleNow, int scoreNow, string fileName, string baseName) =>
+        scoreNow == 2
+        && !string.Equals(titleBefore, titleNow, StringComparison.Ordinal)
+        && TitleScore(titleBefore, fileName, baseName) == 0;
+
+    private static bool IsGone(IntPtr handle) => !NativeMethods.Exists(handle) || !NativeMethods.IsVisible(handle);
 
     private static string StripExtension(string name)
     {

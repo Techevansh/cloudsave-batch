@@ -362,3 +362,66 @@ Remaining phases: D (single Excel), E (multi-file + recursion + resume), F
 (Electron GUI). The Excel and recursion code paths already exist (XLMAIN +
 "Excel analyzer"; EnableRecursion/MaxOfficeFiles), so D/E are mostly validation.
 Test on progressively larger TEST folders; the real work folder is the last step.
+
+## Stage D/E — production folder run (2026-10-21)
+
+Target use: open the TOP folder in File Explorer, run `Run-CloudSave.bat`; every
+`.pptx/.xlsx/.xls` in that folder and all subfolders is opened one by one, cloud-saved
+by the existing add-in, and closed without saving. Hardening for unattended,
+many-file runs (decided from code review before the first real multi-file run):
+
+**Never act in the wrong place**
+- Start window = most recently used Explorer window (Z order) that is not the agent's
+  own folder (rows `cloudsave-agent*`) and not a shell location (내 PC, 홈, 네트워크 ...).
+  Score-by-row-count could pick the agent folder (hundreds of DLLs) — replaced.
+- Rows = Explorer item elements (class `UIItem` in `UIItemsView`), not every list item
+  in the window (ribbon galleries such as 자세히/큰 아이콘 were readable as "folders").
+  Fallback to the earlier visible-row heuristic if the classes are absent (logged once).
+- Folder vs file from evidence in the row's cells (`파일 폴더` / size / Office type),
+  then the extension heuristic. A file with a hidden extension is never "entered" as a
+  folder (that would open it); such Office files are skipped with a warning.
+- Every Explorer click: Explorer forced to the front, row scrolled into view, and a
+  WindowFromPoint hit-test must prove the point belongs to Explorer — otherwise
+  nothing is clicked (`EXPLORER_CLICK_BLOCKED`).
+- The process is per-monitor DPI aware so UIA rectangles and mouse coordinates share
+  one pixel space (a click at a scaled display would otherwise land elsewhere).
+- Enter folder must visibly change the location (address bar / title / listing);
+  Back must verifiably return to the exact parent (Up once as a fallback, only if still
+  in the child). Otherwise `EXPLORER_LOCATION_LOST` stops the whole run rather than
+  processing files in the wrong folder; resume continues it on the next run.
+- Listing completeness: Explorer's status-bar "N개 항목" is compared to the rows read;
+  if fewer, the list is scrolled and re-read; a remaining gap is reported.
+
+**Only touch the window this open produced**
+- Office windows on screen before each open are a baseline and are never driven or
+  closed (a user's own document with unsaved edits can never be closed by "저장 안 함").
+  Exception: a blank workbook/presentation Office replaced with the file.
+- Open-time prompts get the non-modifying answer: Excel "update links?" -> 업데이트 안 함,
+  "file in use" -> 읽기 전용. Save prompts on close -> 저장 안 함, searched only in the
+  document's own window and its Office process's dialogs.
+
+**Honest results**
+- A file counts as uploaded only when the pane shows the per-destination "✅" lines.
+  The add-ins print "분석 리포트 완성" even when an upload failed (Promise.allSettled),
+  with the failure on a "❌" line above it — that is now `UPLOAD_FAILED`, retried once
+  (idempotent: OneDrive PUT replaces, Google updates the existing file; a 401 makes the
+  add-in drop the token so the retry signs in again).
+- Finished-but-unreadable results are `UPLOAD_UNVERIFIED` (counted, reported).
+- Result texts are read only inside the task pane (WebView2 child rect), so ✅/❌ in
+  slide/sheet content cannot be mistaken for results. Completion rules are a pure Core
+  state machine (`AnalysisTracker`) with a pre-click baseline (fast runs are not missed;
+  a retry ignores the previous attempt's report).
+
+**Resume rule**: completed files are skipped on the next run of the same folder; a full
+pass with zero failures clears that folder's records, so resume only ever continues an
+interrupted or partly failed run and the next real run starts fresh. Records are keyed
+by the address-bar path. Single-file tests (`RESUME=false`) remember nothing.
+
+**Operator UX**: `CLOUDSAVE_CONSOLE=human` prints Korean progress (banner, chosen folder
+with counts, 10 s countdown with F12 abort, per-file result, end summary with failure
+list and log path). JSONL stays the GUI protocol and is always written to
+`logs/run-*.jsonl`. Launchers are ASCII-only (cmd.exe parses UTF-8 batch text
+unreliably); Korean text comes from the agent.
+
+Validation: 102 Core unit tests; the Windows project is compile-checked locally against
+the WindowsDesktop reference assemblies (same WPF implicit-usings rules as CI) and in CI.

@@ -27,6 +27,7 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
     public async Task EnsureAnalyzerOpenAsync(OfficeSession session, CancellationToken cancellationToken)
     {
         PrepareWindow(session);
+        await DismissOpenPromptsAsync(session, cancellationToken).ConfigureAwait(false);
         TryExitProtectedView(session, cancellationToken);
 
         if (FindStartButton(session, cancellationToken) is not null)
@@ -45,6 +46,8 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // A modal open-time prompt (update links / file in use) would swallow the ribbon click.
+            await DismissOpenPromptsAsync(session, cancellationToken).ConfigureAwait(false);
             if (FindStartButton(session, cancellationToken) is not null)
             {
                 await _events.WriteAsync(AgentEvent.Info("analyzer.pane", "Task pane appeared"), cancellationToken).ConfigureAwait(false);
@@ -82,6 +85,7 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            await DismissOpenPromptsAsync(session, cancellationToken).ConfigureAwait(false);
             NativeMethods.BringToForeground(session.WindowHandle);
             WakeTaskPane(session);
             if (FindStartButton(session, cancellationToken) is not null)
@@ -97,62 +101,128 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
             "Analyzer task pane did not expose the start button in time.");
     }
 
+    /// <summary>Upload attempts per file: a "❌" destination line triggers exactly one more click.</summary>
+    private const int MaxAttempts = 2;
+
     public async Task<AnalysisResult> RunAnalysisAsync(OfficeSession session, CancellationToken cancellationToken)
     {
-        var start = FindStartButton(session, cancellationToken)
-            ?? throw new AgentOperationException(ErrorCodes.AnalysisButtonNotFound, "Structure-analysis start button not visible.");
+        var interactiveAuth = false;
+        var reported = new HashSet<IntPtr>();
 
-        WakeTaskPane(session);
-        var baseline = TopLevelTitles();
-        Uia.Activate(start);
-        await _events.WriteAsync(AgentEvent.Info("analysis.start", session.Title), cancellationToken).ConfigureAwait(false);
-
-        var deadline = DateTime.UtcNow + _options.AnalysisTimeout;
-        var seenWorking = false;
-        var seenAuth = false;
-        var reported = new HashSet<string>(StringComparer.Ordinal);
-
-        while (DateTime.UtcNow < deadline)
+        for (var attempt = 1; ; attempt++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var start = await WaitForStartButtonAsync(session, cancellationToken).ConfigureAwait(false)
+                ?? throw new AgentOperationException(ErrorCodes.AnalysisButtonNotFound, "Structure-analysis start button not visible.");
 
-            var startVisible = FindStartButton(session, cancellationToken) is not null;
-            var busyVisible = FindInOfficeBounds(session, h => h.Name.Contains(Strings.Analyzing, StringComparison.Ordinal), cancellationToken).Count > 0;
-            var doneVisible = FindInOfficeBounds(session, h => h.Name.Contains(Strings.ReportDone, StringComparison.Ordinal), cancellationToken).Count > 0;
-            var stopVisible = FindInOfficeBounds(session, h => h.Name.Contains(Strings.InspectStopped, StringComparison.Ordinal), cancellationToken).Count > 0;
+            WakeTaskPane(session);
+            var tracker = new AnalysisTracker();
+            tracker.Baseline(PaneSnapshot.FromTexts(PaneTexts(session, cancellationToken)));
+            var baseline = NativeMethods.GetVisibleWindows().Select(w => w.Handle).ToHashSet();
+            Uia.Activate(start);
+            await _events.WriteAsync(AgentEvent.Info("analysis.start", $"{session.Title} (attempt {attempt})"), cancellationToken)
+                .ConfigureAwait(false);
 
-            if (busyVisible && !seenWorking)
+            var verdict = AnalysisVerdict.Pending;
+            var deadline = DateTime.UtcNow + _options.AnalysisTimeout;
+            var announcedWorking = false;
+
+            while (DateTime.UtcNow < deadline)
             {
-                seenWorking = true;
-                await _events.WriteAsync(AgentEvent.Info("analysis.working", session.Title), cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // A new top-level window is almost certainly a sign-in / consent dialog the user must complete.
+                foreach (var w in NativeMethods.GetVisibleWindows())
+                {
+                    if (baseline.Contains(w.Handle) || !reported.Add(w.Handle)) continue;
+                    if (string.IsNullOrWhiteSpace(w.Title) || w.Title.Contains("cloudsave-agent", StringComparison.OrdinalIgnoreCase)) continue;
+                    interactiveAuth = true;
+                    await _events.WriteAsync(AgentEvent.Info("auth.window",
+                        $"Sign-in/consent window: \"{w.Title}\" — complete it manually; no password is stored"), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                verdict = tracker.Observe(PaneSnapshot.FromTexts(PaneTexts(session, cancellationToken)));
+                if (tracker.SeenWorking && !announcedWorking)
+                {
+                    announcedWorking = true;
+                    await _events.WriteAsync(AgentEvent.Info("analysis.working", session.Title), cancellationToken).ConfigureAwait(false);
+                }
+                if (verdict != AnalysisVerdict.Pending) break;
+                Thread.Sleep(400);
             }
 
-            // A new top-level window is almost certainly a sign-in / consent dialog the user must complete.
-            foreach (var w in NativeMethods.GetVisibleWindows())
+            switch (verdict)
             {
-                var key = w.Handle.ToString();
-                if (baseline.Contains(key) || reported.Contains(key)) continue;
-                if (string.IsNullOrWhiteSpace(w.Title) || w.Title.Contains("cloudsave-agent", StringComparison.OrdinalIgnoreCase)) continue;
-                reported.Add(key);
-                seenAuth = true;
-                await _events.WriteAsync(AgentEvent.Info("auth.window",
-                    $"Sign-in/consent window: \"{w.Title}\" — complete it manually; no password is stored"), cancellationToken).ConfigureAwait(false);
+                case AnalysisVerdict.Succeeded:
+                    return AnalysisResult.Completed(interactiveAuth);
+
+                case AnalysisVerdict.SucceededUnverified:
+                    return AnalysisResult.Completed(interactiveAuth, verified: false);
+
+                case AnalysisVerdict.Stopped:
+                    return AnalysisResult.Failure(ErrorCodes.AnalysisFailed, $"Add-in stopped: {tracker.Detail}");
+
+                case AnalysisVerdict.UploadFailed when attempt < MaxAttempts:
+                    // Re-uploading is idempotent (OneDrive PUT replaces; Google updates the existing file).
+                    // An expired token is cleared by the add-in on 401, so the retry signs in again.
+                    await _events.WriteAsync(AgentEvent.Warn("analysis.retry", ErrorCodes.UploadFailed,
+                        $"Upload failed, retrying once: {tracker.Detail}"), cancellationToken).ConfigureAwait(false);
+                    continue;
+
+                case AnalysisVerdict.UploadFailed:
+                    return AnalysisResult.Failure(ErrorCodes.UploadFailed, $"Upload failed: {tracker.Detail}");
+
+                default:
+                    return AnalysisResult.Failure(interactiveAuth ? ErrorCodes.AuthWaitTimeout : ErrorCodes.AnalysisTimeout,
+                        "Analysis did not complete in time (a sign-in window may still be waiting).");
             }
-
-            if (doneVisible)
-                return AnalysisResult.Completed(seenAuth);
-            if (stopVisible)
-                return AnalysisResult.Failure(ErrorCodes.AnalysisFailed, "Analyzer reported a stop/error state.");
-
-            // The add-in restores the start button in finally{} after success or failure.
-            if (startVisible && (seenWorking || seenAuth))
-                return AnalysisResult.Completed(seenAuth);
-
-            Thread.Sleep(400);
         }
+    }
 
-        var code = seenAuth ? ErrorCodes.AuthWaitTimeout : ErrorCodes.AnalysisTimeout;
-        return AnalysisResult.Failure(code, "Analysis did not complete in time (a sign-in window may still be waiting).");
+    /// <summary>The start button, waiting briefly (it is re-enabled by the add-in's finally{} after a run).</summary>
+    private async Task<UiaHit?> WaitForStartButtonAsync(OfficeSession session, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            WakeTaskPane(session);
+            var start = FindStartButton(session, ct);
+            if (start is not null || DateTime.UtcNow >= deadline) return start;
+            await Task.Delay(500, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// All UIA names inside the add-in task pane. The pane is the Office window's visible WebView2
+    /// child; restricting to it keeps "✅"/"❌" in slide or sheet content from being read as results.
+    /// Falls back to the whole Office window if the pane rectangle cannot be determined.
+    /// </summary>
+    private List<string> PaneTexts(OfficeSession session, CancellationToken ct)
+    {
+        var hits = FindInOfficeBounds(session, h => !string.IsNullOrWhiteSpace(h.Name), ct);
+        var panes = PaneRects(session);
+        if (panes.Count > 0)
+        {
+            var inPane = hits.Where(h => panes.Any(p => p.Contains(h.Rect.X + h.Rect.Width / 2, h.Rect.Y + h.Rect.Height / 2))).ToList();
+            if (inPane.Count > 0) hits = inPane;
+        }
+        return hits.Select(h => h.Name).ToList();
+    }
+
+    private static List<Rect> PaneRects(OfficeSession session) =>
+        NativeMethods.GetChildWindows(session.WindowHandle)
+            .Where(c => c.ClassName.StartsWith("Chrome_WidgetWin", StringComparison.Ordinal) && NativeMethods.IsVisible(c.Handle))
+            .Select(c => NativeMethods.RectOf(c.Handle))
+            .Where(r => r.Width > 0 && r.Height > 0)
+            .Select(r => new Rect(r.Left, r.Top, r.Width, r.Height))
+            .ToList();
+
+    private async Task DismissOpenPromptsAsync(OfficeSession session, CancellationToken ct)
+    {
+        var dismissed = OfficeDialogs.TryDismissOpenPrompts(NativeMethods.ProcessIdOf(session.WindowHandle), null);
+        if (dismissed is not null)
+            await _events.WriteAsync(AgentEvent.Info("office.prompt", $"Answered open prompt {dismissed}"), ct).ConfigureAwait(false);
     }
 
     // ---- discovery helpers --------------------------------------------------
@@ -195,7 +265,7 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
     // Contains, not exact: the HTML button reads "🔍 구조 분석 시작" (emoji + text), so its
     // accessible name may carry the emoji/whitespace. Match on the core phrase.
     private UiaHit? FindStartButton(OfficeSession session, CancellationToken ct) =>
-        FindInOfficeBounds(session, h => h.Name.Contains(Strings.AnalysisStart, StringComparison.Ordinal), ct).FirstOrDefault();
+        FindInOfficeBounds(session, h => h.Name.Contains(AnalyzerPaneText.StartButton, StringComparison.Ordinal), ct).FirstOrDefault();
 
     /// <summary>Prompt the Office window and its WebView2 child windows to build their accessibility trees.</summary>
     private static void WakeTaskPane(OfficeSession session)
@@ -303,6 +373,4 @@ internal sealed class WindowsAnalyzerAdapter : IAnalyzerAdapter
         catch { /* best effort */ }
     }
 
-    private static HashSet<string> TopLevelTitles() =>
-        NativeMethods.GetVisibleWindows().Select(w => w.Handle.ToString()).ToHashSet(StringComparer.Ordinal);
 }

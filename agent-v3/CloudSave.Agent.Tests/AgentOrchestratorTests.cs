@@ -212,9 +212,10 @@ public sealed class AgentOrchestratorTests
         // First read lists "ghost"; the re-read before entering no longer lists it.
         var first = new List<ExplorerItem> { FakeExplorer.Folder("ghost") };
         explorer.Rows[""] = first;
+        // Call 0 = start announcement, call 1 = traversal snapshot, call 2 = re-read before entering.
         explorer.ReadFailure = (folder, call) =>
         {
-            if (folder == "" && call >= 1) explorer.Rows[""] = new List<ExplorerItem>(); // disappear on re-read
+            if (folder == "" && call >= 2) explorer.Rows[""] = new List<ExplorerItem>(); // disappear on re-read
             return null;
         };
 

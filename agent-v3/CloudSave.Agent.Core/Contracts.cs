@@ -8,23 +8,43 @@ namespace CloudSave.Agent.Core;
 /// </summary>
 public interface IExplorerAdapter
 {
-    /// <summary>Pick the start Explorer window the user already opened and return its logical identity.</summary>
+    /// <summary>
+    /// Pick the start Explorer window the user already opened and return its logical identity
+    /// (the address-bar path when readable, else the window title). Every LogicalPath of the
+    /// run is rooted here, so it also namespaces the resume records.
+    /// </summary>
     Task<string> GetStartContextAsync(CancellationToken cancellationToken);
 
     /// <summary>Read the current rows of the active folder.</summary>
     Task<IReadOnlyList<ExplorerItem>> ReadItemsAsync(string logicalFolder, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Navigate into a folder. Returns only once Explorer has verifiably left the current folder;
+    /// throws (and stays put) when the navigation did not happen.
+    /// </summary>
     Task EnterFolderAsync(ExplorerItem folder, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Return to the folder that was current before the matching <see cref="EnterFolderAsync"/>.
+    /// Returns only once Explorer is verifiably back there; otherwise throws
+    /// <see cref="ErrorCodes.ExplorerLocationLost"/> and the run must stop.
+    /// </summary>
     Task GoBackAsync(CancellationToken cancellationToken);
 
-    /// <summary>Open a file by invoking its Explorer row (InvokePattern, else its real BoundingRectangle centre).</summary>
+    /// <summary>Open a file by double-activating its Explorer row (real BoundingRectangle centre, verified hit-test).</summary>
     Task ActivateFileAsync(ExplorerItem file, CancellationToken cancellationToken);
 }
 
 /// <summary>Finds the Office window for an opened file and closes it without modifying the source.</summary>
 public interface IOfficeAdapter
 {
+    /// <summary>
+    /// Called immediately before the file is opened. Records the Office windows that already
+    /// exist so the agent only ever drives (and closes) the window its own open produced,
+    /// never a document the user already had open.
+    /// </summary>
+    Task PrepareForOpenAsync(ExplorerItem file, CancellationToken cancellationToken);
+
     Task<OfficeSession> WaitForDocumentAsync(ExplorerItem file, CancellationToken cancellationToken);
 
     /// <summary>Close via WindowPattern.Close; if a save prompt appears, choose discard (the agent never edits the file).</summary>
@@ -46,6 +66,9 @@ public interface IStateStore
 {
     Task<ProcessingRecord?> GetAsync(string logicalPath, CancellationToken cancellationToken);
     Task UpsertAsync(ProcessingRecord record, CancellationToken cancellationToken);
+
+    /// <summary>Remove every record at or under <paramref name="logicalRoot"/>. Returns how many were removed.</summary>
+    Task<int> RemoveUnderAsync(string logicalRoot, CancellationToken cancellationToken);
 }
 
 public interface IEventWriter

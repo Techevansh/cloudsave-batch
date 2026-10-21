@@ -37,6 +37,15 @@ internal sealed class FakeStateStore : IStateStore
         return Task.CompletedTask;
     }
 
+    public Task<int> RemoveUnderAsync(string logicalRoot, CancellationToken cancellationToken)
+    {
+        var keys = _records.Keys.Where(k => LogicalPaths.IsAtOrUnder(k, logicalRoot)).ToList();
+        foreach (var k in keys) _records.TryRemove(k, out _);
+        return Task.FromResult(keys.Count);
+    }
+
+    public int Count => _records.Count;
+
     public ProcessingRecord? Current(string key)
     {
         _records.TryGetValue(key, out var r);
@@ -57,6 +66,9 @@ internal sealed class FakeExplorer : IExplorerAdapter
     private readonly Dictionary<string, int> _readCalls = new(StringComparer.Ordinal);
 
     public Func<ExplorerItem, Exception?>? EnterFailure;
+
+    /// <summary>Optional: return an exception to throw for the n-th (zero-based) GoBack; null = succeed.</summary>
+    public Func<int, Exception?>? GoBackFailure;
 
     public static ExplorerItem File(string name, string? logicalPath = null) =>
         new(name, logicalPath ?? name, false, DocumentClassifier.ClassifyFile(name));
@@ -89,12 +101,17 @@ internal sealed class FakeExplorer : IExplorerAdapter
 
     public Task GoBackAsync(CancellationToken cancellationToken)
     {
+        var ex = GoBackFailure?.Invoke(BackCount);
         BackCount++;
+        if (ex is not null) throw ex;
         return Task.CompletedTask;
     }
 
+    public Action<ExplorerItem>? OnActivate;
+
     public Task ActivateFileAsync(ExplorerItem file, CancellationToken cancellationToken)
     {
+        OnActivate?.Invoke(file);
         Activated.Add(file.LogicalPath);
         return Task.CompletedTask;
     }
@@ -105,8 +122,18 @@ internal sealed class FakeOffice : IOfficeAdapter
     public int CloseCount;
     public Func<ExplorerItem, Exception?>? WaitFailure;
 
+    /// <summary>Call order of PrepareForOpen ("prepare:x") and WaitForDocument ("wait:x").</summary>
+    public readonly List<string> Calls = new();
+
+    public Task PrepareForOpenAsync(ExplorerItem file, CancellationToken cancellationToken)
+    {
+        Calls.Add("prepare:" + file.LogicalPath);
+        return Task.CompletedTask;
+    }
+
     public Task<OfficeSession> WaitForDocumentAsync(ExplorerItem file, CancellationToken cancellationToken)
     {
+        Calls.Add("wait:" + file.LogicalPath);
         var ex = WaitFailure?.Invoke(file);
         if (ex is not null) throw ex;
         var kind = file.Kind == DocumentKind.Excel ? DocumentKind.Excel : DocumentKind.PowerPoint;

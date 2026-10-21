@@ -72,6 +72,27 @@ public sealed class JsonStateStore : IStateStore
         }
     }
 
+    public async Task<int> RemoveUnderAsync(string logicalRoot, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            int removed;
+            lock (_records)
+            {
+                var keys = _records.Keys.Where(k => LogicalPaths.IsAtOrUnder(k, logicalRoot)).ToList();
+                foreach (var k in keys) _records.Remove(k);
+                removed = keys.Count;
+            }
+            if (removed > 0) await PersistAsync().ConfigureAwait(false);
+            return removed;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     private async Task PersistAsync()
     {
         Dictionary<string, ProcessingRecord> snapshot;

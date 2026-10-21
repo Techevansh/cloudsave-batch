@@ -55,9 +55,19 @@ public sealed class AgentRunRequest
     /// <summary>Cap on Office files processed this run. 0 = unlimited. Set to 1 for a single-file milestone test.</summary>
     public int MaxOfficeFiles { get; init; } = 0;
 
-    /// <summary>When true, files already recorded as completed in the state store are skipped (resume).</summary>
+    /// <summary>
+    /// When true, files already recorded as completed in the state store are skipped (resume).
+    /// A run that finishes with no failures clears its folder's records, so resume only ever
+    /// continues an interrupted or partly failed run; the next full run starts fresh.
+    /// </summary>
     public bool EnableResume { get; init; } = true;
+
+    /// <summary>Pause after the start folder is identified (shown to the user) before any file is opened. F12 cancels.</summary>
+    public TimeSpan StartDelay { get; init; } = TimeSpan.Zero;
 }
+
+/// <summary>One file (or folder subtree) that did not complete, for the end-of-run report.</summary>
+public sealed record FileFailure(string LogicalPath, string Code, string Message);
 
 public sealed class AgentRunResult
 {
@@ -65,6 +75,10 @@ public sealed class AgentRunResult
     public int Processed { get; init; }
     public int Failed { get; init; }
     public int Skipped { get; init; }
+    /// <summary>Completed files whose per-destination upload lines could not be read (see UPLOAD_UNVERIFIED).</summary>
+    public int Unverified { get; init; }
+    public string Root { get; init; } = "";
+    public IReadOnlyList<FileFailure> Failures { get; init; } = Array.Empty<FileFailure>();
     public string? ErrorCode { get; init; }
     public string? Message { get; init; }
 
@@ -74,6 +88,19 @@ public sealed class AgentRunResult
     public static AgentRunResult Fail(string code, string message, int processed = 0, int failed = 0, int skipped = 0) =>
         new() { Success = false, ErrorCode = code, Message = message, Processed = processed, Failed = failed, Skipped = skipped };
 }
+
+/// <summary>Data of the agent.start event (what this run will do), rendered as the console banner.</summary>
+public sealed record AgentStartInfo(bool Recursion, int MaxOfficeFiles, bool Resume, string? LogFile);
+
+/// <summary>The end-of-run report, carried as the Data of the final agent.complete / agent.failed event.</summary>
+public sealed record RunSummary(
+    string Root,
+    int Processed,
+    int Failed,
+    int Skipped,
+    int Unverified,
+    IReadOnlyList<FileFailure> Failures,
+    string? LogFile);
 
 /// <summary>
 /// A single row read from a File Explorer window through UI Automation.
@@ -97,10 +124,14 @@ public sealed record AnalysisResult(
     bool Success,
     bool AuthenticationWasInteractive,
     string? ErrorCode = null,
-    string? Message = null
+    string? Message = null,
+    bool Verified = true
 )
 {
-    public static AnalysisResult Completed(bool interactiveAuth) => new(true, interactiveAuth);
+    /// <param name="verified">False when the add-in finished but its per-destination "✅" lines could not be read.</param>
+    public static AnalysisResult Completed(bool interactiveAuth, bool verified = true) =>
+        new(true, interactiveAuth, null, null, verified);
+
     public static AnalysisResult Failure(string code, string message) => new(false, false, code, message);
 }
 
@@ -111,6 +142,19 @@ public sealed record ProcessingRecord(
     DateTimeOffset UpdatedAt,
     string? LastError = null
 );
+
+/// <summary>LogicalPath composition: parent + "\" + name, rooted at the start context.</summary>
+public static class LogicalPaths
+{
+    public static string Combine(string folder, string name) =>
+        string.IsNullOrEmpty(folder) ? name : folder + "\\" + name;
+
+    /// <summary>True when <paramref name="path"/> is <paramref name="root"/> itself or lies beneath it.</summary>
+    public static bool IsAtOrUnder(string path, string root) =>
+        string.IsNullOrEmpty(root)
+        || string.Equals(path, root, StringComparison.Ordinal)
+        || path.StartsWith(root + "\\", StringComparison.Ordinal);
+}
 
 /// <summary>Canonical status strings stored in the state store.</summary>
 public static class ProcessingStatus

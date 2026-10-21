@@ -11,6 +11,14 @@ public static class ErrorCodes
     public const string ExplorerNotFound = "EXPLORER_NOT_FOUND";
     public const string ExplorerRowNotFound = "EXPLORER_ROW_NOT_FOUND";
     public const string ExplorerNavigationTimeout = "EXPLORER_NAVIGATION_TIMEOUT";
+    /// <summary>Explorer is no longer in the folder the run expects (e.g. Back did not return). Aborts the run.</summary>
+    public const string ExplorerLocationLost = "EXPLORER_LOCATION_LOST";
+    /// <summary>A click target was covered by another window, so the click was not sent.</summary>
+    public const string ExplorerClickBlocked = "EXPLORER_CLICK_BLOCKED";
+    /// <summary>Warning: Explorer's item count is larger than the rows UI Automation exposed.</summary>
+    public const string ExplorerListIncomplete = "EXPLORER_LIST_INCOMPLETE";
+    /// <summary>Warning: Office-looking files with hidden extensions were skipped.</summary>
+    public const string ExplorerExtensionHidden = "EXPLORER_EXTENSION_HIDDEN";
 
     // Office window
     public const string OfficeOpenTimeout = "OFFICE_OPEN_TIMEOUT";
@@ -28,6 +36,10 @@ public static class ErrorCodes
     public const string AuthWaitTimeout = "AUTH_WAIT_TIMEOUT";
     public const string AnalysisTimeout = "ANALYSIS_TIMEOUT";
     public const string AnalysisFailed = "ANALYSIS_FAILED";
+    /// <summary>The add-in finished but reported a failed upload ("❌") for at least one destination.</summary>
+    public const string UploadFailed = "UPLOAD_FAILED";
+    /// <summary>Warning: the add-in finished but its per-destination result lines could not be read.</summary>
+    public const string UploadUnverified = "UPLOAD_UNVERIFIED";
 
     // UIA generic
     public const string UiaElementStale = "UIA_ELEMENT_STALE";
